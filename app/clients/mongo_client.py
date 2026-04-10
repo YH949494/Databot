@@ -42,6 +42,8 @@ class MongoService:
         self.derived("channel_daily").create_index([("date", ASCENDING)], unique=True)
         self.derived("content_daily").create_index([("date", ASCENDING), ("post_id", ASCENDING)], unique=True)
         self.derived("inviter_daily").create_index([("date", ASCENDING), ("inviter_user_id", ASCENDING)], unique=True)
+        self.derived("user_profile_summary").create_index([("user_id", ASCENDING)], unique=True)
+        self.derived("segmentation_kpis").create_index([("date", ASCENDING)], unique=True)
         logger.info("Derived collection indexes initialized")
 
     def upsert_one(self, collection: str, filter_query: dict[str, Any], document: dict[str, Any]) -> None:

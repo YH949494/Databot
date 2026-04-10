@@ -6,6 +6,7 @@ from datetime import timedelta
 from app.analytics.channel import compute_channel_daily
 from app.analytics.content import compute_content_daily
 from app.analytics.referral import compute_referral_daily, compute_referral_weekly
+from app.analytics.segmentation import compute_segmentation_kpis, compute_user_profiles
 from app.clients.mongo_client import MongoService
 from app.clients.telegram_client import TelegramService
 from app.config.settings import settings
@@ -20,8 +21,10 @@ async def run_daily_pipeline(mongo: MongoService, telegram: TelegramService) -> 
     referral = compute_referral_daily(mongo, target_date)
     channel = compute_channel_daily(mongo, target_date)
     content = compute_content_daily(mongo, target_date)
+    segmentation = compute_user_profiles(mongo, target_date)
+    segmentation_kpis = compute_segmentation_kpis(mongo, target_date)
 
-    report = build_daily_report(target_date, settings.tz, referral, channel, content)
+    report = build_daily_report(target_date, settings.tz, referral, channel, content, segmentation, segmentation_kpis)
     await telegram.send_report(report)
     logger.info("Daily pipeline completed")
 
