@@ -23,6 +23,8 @@ class DerivedCollections(BaseSettings):
     channel_daily: str = Field("channel_daily_summary", alias="DERIVED_CHANNEL_DAILY_COLLECTION")
     content_daily: str = Field("content_daily_summary", alias="DERIVED_CONTENT_DAILY_COLLECTION")
     inviter_daily: str = Field("referral_inviter_stats_daily", alias="DERIVED_INVITER_DAILY_COLLECTION")
+    user_profile_summary: str = Field("user_profile_summary", alias="DERIVED_USER_PROFILE_COLLECTION")
+    segmentation_kpis: str = Field("segmentation_daily_kpis", alias="DERIVED_SEGMENTATION_KPIS_COLLECTION")
 
 
 class Settings(BaseSettings):

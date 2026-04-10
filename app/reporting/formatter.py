@@ -19,6 +19,8 @@ def build_daily_report(
     referral: dict[str, Any],
     channel: dict[str, Any],
     content: dict[str, Any],
+    segmentation: dict[str, Any] | None = None,
+    segmentation_kpis: dict[str, Any] | None = None,
 ) -> str:
     conversion = safe_divide(referral.get("qualified", 0), referral.get("joins", 0))
     top_post = content.get("top_post")
@@ -59,6 +61,24 @@ def build_daily_report(
     ]
 
     lines.extend([f"- {alert}" for alert in alerts] or ["- none"])
+    lines.extend(
+        [
+            "",
+            "Segmentation",
+            f"- New: {(segmentation or {}).get('new', 0)}  → onboarding_push",
+            f"- Active: {(segmentation or {}).get('active', 0)}  → leaderboard_competition",
+            f"- At risk: {(segmentation or {}).get('at_risk', 0)}  → comeback_voucher",
+            f"- Dead: {(segmentation or {}).get('dead', 0)}  → aggressive_reactivation",
+            f"- High value: {(segmentation or {}).get('high_value', 0)}  → vip_treatment",
+            f"- Unknown: {(segmentation or {}).get('unknown', 0)}  → no_action",
+            "",
+            "KPIs",
+            f"- Claim→Play conversion: {_fmt_pct((segmentation_kpis or {}).get('claim_to_play_conversion'))}",
+            f"- D3 retention: {_fmt_pct((segmentation_kpis or {}).get('d3_retention_rate'))}",
+            f"- D7 retention: {_fmt_pct((segmentation_kpis or {}).get('d7_retention_rate'))}",
+            f"- Cost per active player: {(segmentation_kpis or {}).get('cost_per_active_player', 'null')}",
+        ]
+    )
     lines.extend(["", "Actions"])
     lines.extend([f"- {action}" for action in actions])
     return "\n".join(lines)
