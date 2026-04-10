@@ -1,0 +1,21 @@
+app = "telegram-growth-intelligence-bot"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  APP_ENV = "production"
+  LOG_LEVEL = "INFO"
+  TZ = "Asia/Kuala_Lumpur"
+  SCHEDULER_ENABLED = "true"
+  SCHEDULE_DAILY_CRON = "10 0 * * *"
+  SCHEDULE_WEEKLY_CRON = "20 0 * * 1"
+
+[processes]
+  app = "python -m app.main --mode scheduler"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
