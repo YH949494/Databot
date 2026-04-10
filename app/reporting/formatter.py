@@ -78,8 +78,11 @@ def build_weekly_report(report_date: datetime, tz_name: str, weekly_referral: di
         "Referral",
         f"- Total referred joins: {weekly_referral.get('joins')}",
         f"- Total qualified: {weekly_referral.get('qualified')}",
-        f"- Conversion trend: {_fmt_pct(weekly_referral.get('overall_conversion'))}",
-        f"- Trend vs previous week: {_fmt_pct(weekly_referral.get('trend_vs_previous_week')) if weekly_referral.get('trend_vs_previous_week') is not None else 'null'}",
+        f"- Conversion: {_fmt_pct(weekly_referral.get('overall_conversion'))}",
+        f"- Trend vs previous week: {_fmt_pct(weekly_referral.get('trend_vs_previous_week')) if weekly_referral.get('trend_vs_previous_week') is not None else 'no prior week data'}",
+        "- Avg time to qualify: {}h (approx — averaged from daily figures)".format(
+            weekly_referral.get('avg_time_to_qualify_hours') if weekly_referral.get('avg_time_to_qualify_hours') is not None else 'null'
+        ),
     ]
 
     if weekly_channel:
@@ -90,6 +93,8 @@ def build_weekly_report(report_date: datetime, tz_name: str, weekly_referral: di
                 f"- Weekly net growth: {weekly_channel.get('net_growth')}",
             ]
         )
+    else:
+        lines.extend(["", "Channel", "- Weekly channel summary: not available"])
 
     lines.extend(
         [

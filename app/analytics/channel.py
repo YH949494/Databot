@@ -14,23 +14,50 @@ logger = logging.getLogger(__name__)
 def compute_channel_daily(mongo: MongoService, for_date: datetime) -> dict[str, Any]:
     day_start, day_end = day_bounds_utc(for_date.astimezone(timezone.utc))
 
-    events = list(
-        mongo.source("channel_events").find(
-            {"event_time": {"$gte": day_start, "$lt": day_end}},
-            {"event_type": 1, "is_referred": 1},
+    # Server-side aggregation — avoids pulling all events into Python memory.
+    pipeline: list[dict] = [
+        {"$match": {"event_time": {"$gte": day_start, "$lt": day_end}}},
+        {
+            "$group": {
+                "_id": None,
+                "joins": {"$sum": {"$cond": [{"$eq": ["$event_type", "join"]}, 1, 0]}},
+                "leaves": {"$sum": {"$cond": [{"$eq": ["$event_type", "leave"]}, 1, 0]}},
+                "referred_joins": {
+                    "$sum": {
+                        "$cond": [
+                            {
+                                "$and": [
+                                    {"$eq": ["$event_type", "join"]},
+                                    {"$eq": ["$is_referred", True]},
+                                ]
+                            },
+                            1,
+                            0,
+                        ]
+                    }
+                },
+            }
+        },
+    ]
+
+    result = next(mongo.source("channel_events").aggregate(pipeline), None)
+    joins = int(result["joins"]) if result else 0
+    leaves = int(result["leaves"]) if result else 0
+    referred_joins = int(result["referred_joins"]) if result else 0
+
+    prior_days = list(
+        mongo.derived("channel_daily").find(
+            {"date": {"$gte": day_start - timedelta(days=7), "$lt": day_start}},
+            {"leaves": 1},
         )
     )
+    baseline_leave_avg = (
+        sum(doc.get("leaves", 0) for doc in prior_days) / len(prior_days)
+        if prior_days
+        else None
+    )
 
-    joins = sum(1 for event in events if event.get("event_type") == "join")
-    leaves = sum(1 for event in events if event.get("event_type") == "leave")
-    referred_joins = sum(1 for event in events if event.get("event_type") == "join" and event.get("is_referred") is True)
-
-    prior_days = list(mongo.derived("channel_daily").find({"date": {"$gte": day_start - timedelta(days=7), "$lt": day_start}}))
-    baseline_leave_avg = None
-    if prior_days:
-        baseline_leave_avg = sum(doc.get("leaves", 0) for doc in prior_days) / len(prior_days)
-
-    churn_signals = []
+    churn_signals: list[str] = []
     if abnormal_spike(leaves, baseline_leave_avg):
         churn_signals.append("leave_spike_vs_recent_baseline")
 

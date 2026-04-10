@@ -63,7 +63,10 @@ def compute_content_daily(mongo: MongoService, for_date: datetime) -> dict[str, 
     mongo.bulk_upsert("content_daily", [({"date": row["date"], "post_id": row["post_id"]}, row) for row in rows])
 
     top_post = max(rows, key=lambda x: x.get("claims_24h", 0), default=None)
-    weakest_post = min(rows, key=lambda x: x.get("claim_rate_per_view") or 1, default=None)
+    # Exclude posts with no views (claim_rate_per_view is None) from weakest-post selection
+    # so zero-view posts don't silently disappear from the signal.
+    rated_rows = [r for r in rows if r.get("claim_rate_per_view") is not None]
+    weakest_post = min(rated_rows, key=lambda x: x["claim_rate_per_view"], default=None)
 
     result = {
         "date": day_start,

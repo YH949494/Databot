@@ -6,6 +6,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY requirements.txt .
+# Install only production dependencies — pytest lives in requirements-dev.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app

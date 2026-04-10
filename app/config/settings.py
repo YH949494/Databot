@@ -41,13 +41,17 @@ class Settings(BaseSettings):
     mongodb_db_name: str = Field(..., alias="MONGODB_DB_NAME")
 
     tg_growth_bot_token: str = Field(..., alias="TG_GROWTH_BOT_TOKEN")
-    tg_report_chat_id: str = Field(..., alias="TG_REPORT_CHAT_ID")
+    tg_report_chat_id: int = Field(..., alias="TG_REPORT_CHAT_ID")
     tg_admin_user_ids: str = Field(..., alias="TG_ADMIN_USER_IDS")
     tg_channel_id: str = Field(..., alias="TG_CHANNEL_ID")
 
     scheduler_enabled: bool = Field(True, alias="SCHEDULER_ENABLED")
     schedule_daily_cron: str = Field("10 0 * * *", alias="SCHEDULE_DAILY_CRON")
     schedule_weekly_cron: str = Field("20 0 * * 1", alias="SCHEDULE_WEEKLY_CRON")
+
+    # Instantiated once at startup — not re-read on every access.
+    source_collections: SourceCollections = Field(default_factory=SourceCollections)
+    derived_collections: DerivedCollections = Field(default_factory=DerivedCollections)
 
     @field_validator("log_level")
     @classmethod
@@ -57,14 +61,6 @@ class Settings(BaseSettings):
     @property
     def admin_user_ids(self) -> list[int]:
         return [int(user_id.strip()) for user_id in self.tg_admin_user_ids.split(",") if user_id.strip()]
-
-    @property
-    def source_collections(self) -> SourceCollections:
-        return SourceCollections()
-
-    @property
-    def derived_collections(self) -> DerivedCollections:
-        return DerivedCollections()
 
 
 settings = Settings()
