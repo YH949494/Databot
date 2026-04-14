@@ -8,6 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.clients.mongo_client import MongoService
 from app.clients.telegram_client import TelegramService
+from app.collectors.channel_collector import build_dispatcher
 from app.config.settings import settings
 from app.jobs.pipelines import run_daily_pipeline, run_weekly_pipeline
 
@@ -46,6 +47,7 @@ async def run_forever() -> None:
         logger.info("Initialising MongoDB connection and derived indexes…")
         mongo = MongoService()
         mongo.setup_derived_indexes()
+        mongo.setup_source_indexes()
         logger.info("Initialising Telegram client…")
         telegram = TelegramService()
     except Exception:
@@ -62,8 +64,14 @@ async def run_forever() -> None:
         else:
             logger.warning("Scheduler is disabled (SCHEDULER_ENABLED=false). Running in idle mode.")
 
-        while True:
-            await asyncio.sleep(30)
+        # Start the channel event collector via aiogram long-polling.
+        # This runs concurrently with the scheduler — one asyncio event loop handles both.
+        logger.info("Starting channel event collector (polling for join/leave/post events)…")
+        dp = build_dispatcher(mongo)
+        await dp.start_polling(
+            telegram.bot,
+            allowed_updates=["chat_member", "channel_post", "edited_channel_post"],
+        )
     finally:
         if telegram is not None:
             await telegram.close()

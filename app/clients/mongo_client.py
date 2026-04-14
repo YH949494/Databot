@@ -44,6 +44,22 @@ class MongoService:
         collection_name = getattr(settings.derived_collections, name)
         return self.db[collection_name] 
 
+    def setup_source_indexes(self) -> None:
+        """Create indexes on source collections written by the event collector."""
+        self.source_db[settings.source_collections.channel_events].create_index(
+            [("event_time", ASCENDING)]
+        )
+        self.source_db[settings.source_collections.channel_events].create_index(
+            [("user_id", ASCENDING), ("event_time", ASCENDING)]
+        )
+        self.source_db[settings.source_collections.post_logs].create_index(
+            [("post_time", ASCENDING)]
+        )
+        self.source_db[settings.source_collections.post_logs].create_index(
+            [("post_id", ASCENDING), ("chat_id", ASCENDING)], unique=True
+        )
+        logger.info("Source collection indexes initialized")
+
     def setup_derived_indexes(self) -> None:
         self.derived("referral_daily").create_index([("date", ASCENDING)], unique=True)
         self.derived("referral_weekly").create_index([("week_start", ASCENDING), ("week_end", ASCENDING)], unique=True)
