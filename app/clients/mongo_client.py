@@ -26,15 +26,16 @@ class MongoService:
             socketTimeoutMS=_SOCKET_TIMEOUT_MS,
             serverSelectionTimeoutMS=_SERVER_SELECTION_TIMEOUT_MS,
         )
-        self.db: Database = self.client[settings.mongodb_db_name]
+        self.db: Database = self.client[settings.mongodb_db_name]         
+        self.source_db: Database = self.client[settings.source_db_name]   
 
     def source(self, name: str) -> Collection:
         collection_name = getattr(settings.source_collections, name)
-        return self.db[collection_name]
+        return self.source_db[collection_name]   
 
     def derived(self, name: str) -> Collection:
         collection_name = getattr(settings.derived_collections, name)
-        return self.db[collection_name]
+        return self.db[collection_name] 
 
     def setup_derived_indexes(self) -> None:
         self.derived("referral_daily").create_index([("date", ASCENDING)], unique=True)
