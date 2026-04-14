@@ -4,29 +4,37 @@ from app.reporting.formatter import build_daily_report, build_weekly_report
 
 
 def test_build_daily_report_contains_required_sections() -> None:
+    """Report must contain all major sections with updated referral labels."""
     report = build_daily_report(
         report_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
         tz_name="Asia/Kuala_Lumpur",
-        referral={"joins": 10, "qualified": 4, "pending_hold": 2, "suspicious_patterns": []},
+        referral={"joins": 10, "total_referrals_snapshot": 500, "suspicious_patterns": [],
+                  "top_inviters": [{"inviter_user_id": "u1", "username": "Alice", "referral_count": 12}]},
         channel={"new_joins": 5, "leaves": 1, "net_growth": 4, "churn_signals": []},
         content={"top_post": {"post_id": 111}, "weakest_post": {"post_id": 222}},
     )
 
     assert "Daily Growth Intelligence Report" in report
-    assert "Join→Qualified conversion" in report
+    assert "Voucher claims today" in report        # new referral label
+    assert "Total referrals (all-time)" in report  # snapshot label
+    assert "Top inviters" in report
     assert "Alerts" in report
     assert "Actions" in report
 
 
 def test_build_daily_report_low_conversion_alert() -> None:
+    """Conversion alert removed — not computable from vouchers schema. Spike alert still works."""
     report = build_daily_report(
         report_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
         tz_name="Asia/Kuala_Lumpur",
-        referral={"joins": 50, "qualified": 5, "pending_hold": 0, "suspicious_patterns": []},
+        referral={"joins": 50, "suspicious_patterns": ["claim_spike_vs_recent_baseline"], "top_inviters": []},
         channel={"new_joins": 5, "leaves": 1, "net_growth": 4, "churn_signals": []},
         content={"top_post": None, "weakest_post": None},
     )
-    assert "Conversion is below 20%" in report
+    # Conversion alert removed — qualified not available from vouchers
+    assert "Conversion is below 20%" not in report
+    # Spike alert from suspicious_patterns still surfaces
+    assert "claim_spike_vs_recent_baseline" in report
 
 
 def test_build_daily_report_no_posts() -> None:

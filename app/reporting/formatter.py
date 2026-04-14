@@ -43,8 +43,7 @@ def build_daily_report(
         alerts.append("Referral anomaly: " + ", ".join(referral["suspicious_patterns"]))
     if channel.get("churn_signals"):
         alerts.append("Channel churn signal: " + ", ".join(channel["churn_signals"]))
-    if ref_joins and ref_joins > 0 and conversion is not None and conversion < 0.2:
-        alerts.append("Conversion is below 20%")
+    # Conversion alert removed — qualified breakdown not available from vouchers schema
 
     actions = [
         "Review top 5 low-quality inviters and suspend suspicious acquisition sources.",
@@ -52,15 +51,19 @@ def build_daily_report(
         "Audit no-checkin and left-before-hold failures for onboarding friction.",
     ]
 
+    top_inv_str = ", ".join(
+        f"{i.get('username') or i.get('inviter_user_id','?')} ({i.get('referral_count','?')})"
+        for i in referral.get("top_inviters", [])[:3]
+    ) or "none"
+
     lines = [
         "📊 Daily Growth Intelligence Report",
         f"Date: {format_local(report_date, tz_name)}",
         "",
         "Referral",
-        f"- Joins: {_fmt_val(ref_joins)}",
-        f"- Qualified: {_fmt_val(ref_qualified)}",
-        f"- Pending hold: {_fmt_val(referral.get('pending_hold'))}",
-        f"- Join→Qualified conversion: {_fmt_pct(conversion)}",
+        f"- Voucher claims today: {_fmt_val(ref_joins)}",
+        f"- Total referrals (all-time): {_fmt_val(referral.get('total_referrals_snapshot'))}",
+        f"- Top inviters: {top_inv_str}",
         "",
         "Channel",
     ]

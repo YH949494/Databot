@@ -20,241 +20,109 @@ def _field_exists(mongo: MongoService, collection: str, field_name: str) -> bool
 
 
 def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str, Any]:
+    """Compute daily referral metrics from users.referral_count and vouchers.
+
+    Source of truth:
+      - users.referral_count  — cumulative referrals per user (set by referral_bot)
+      - vouchers               — daily claim activity (claimedAt, usernameLower/claimedBy, status)
+
+    'joins' = new voucher claims today (status=claimed, claimedAt within day).
+    'top_inviters' = users with highest referral_count, ranked descending.
+    Qualified/pending/failure breakdown not available from this schema — reported as None.
+    """
     day_start, day_end = day_bounds_utc(for_date.astimezone(timezone.utc))
-    logger.info("Referral source resolution: events=%s", "referral_events")
-    has_status = _field_exists(mongo, "referral_events", "status")
-    has_event_time = _field_exists(mongo, "referral_events", "event_time")
-    has_created_at = _field_exists(mongo, "referral_events", "created_at")
+    logger.info("Referral daily: deriving from users.referral_count + vouchers")
 
-    if not has_status or not has_event_time:
-        if not has_created_at:
-            logger.warning(
-                "Referral source unavailable for daily status metrics: collection=%s required_fields=status+event_time or created_at",
-                "referral_events",
-            )
-            summary = {
-                "date": day_start,
-                "joins": None,
-                "qualified": None,
-                "pending_hold": None,
-                "failed_no_checkin": None,
-                "failed_not_subscribed": None,
-                "failed_left_before_hold": None,
-                "avg_time_to_qualify_hours": None,
-                "top_inviters": [],
-                "low_quality_inviters": [],
-                "suspicious_patterns": [],
-                "_source_missing": True,
-            }
-            mongo.upsert_one("referral_daily", {"date": day_start}, summary)
-            return summary
-
-        logger.warning(
-            "Referral status fields not available; using created_at join-only aggregation from %s",
-            "referral_events",
-        )
-        join_pipeline: list[dict] = [
-            {"$match": {"created_at": {"$gte": day_start, "$lt": day_end}}},
-            {"$group": {"_id": "$referrer_user_id", "joins": {"$sum": 1}}},
-        ]
-        inviter_stats = []
-        total_joins = 0
-        for row in mongo.source("referral_events").aggregate(join_pipeline):
-            joins = int(row.get("joins", 0))
-            total_joins += joins
-            inviter_stats.append(
-                {
-                    "inviter_user_id": str(row.get("_id") or "unknown"),
-                    "date": day_start,
-                    "joins": joins,
-                    "qualified": 0,
-                    "pending": 0,
-                    "conversion_rate": None,
-                    "avg_time_to_qualify_hours": None,
-                    "suspicious_flag": False,
-                    "quality_flag": "insufficient_data",
-                }
-            )
-        inviter_stats_sorted = sorted(inviter_stats, key=lambda x: x["joins"], reverse=True)
-        summary = {
-            "date": day_start,
-            "joins": total_joins,
-            "qualified": None,
-            "pending_hold": None,
-            "failed_no_checkin": None,
-            "failed_not_subscribed": None,
-            "failed_left_before_hold": None,
-            "avg_time_to_qualify_hours": None,
-            "top_inviters": inviter_stats_sorted[:5],
-            "low_quality_inviters": [],
-            "suspicious_patterns": [],
-            "_source_fallback": "join_count_only",
-        }
-        mongo.upsert_one("referral_daily", {"date": day_start}, summary)
-        mongo.bulk_upsert(
-            "inviter_daily",
-            [({"date": x["date"], "inviter_user_id": x["inviter_user_id"]}, x) for x in inviter_stats],
-        )
-        return summary
-
-    # Server-side aggregation — avoids pulling all documents into Python memory.
-    pipeline_status_counts: list[dict] = [
-        {"$match": {"event_time": {"$gte": day_start, "$lt": day_end}}},
-        {"$group": {"_id": "$status", "count": {"$sum": 1}}},
-    ]
-    status_counts: dict[str, int] = {}
-    for row in mongo.source("referral_events").aggregate(pipeline_status_counts):
-        key = str(row["_id"] or "unknown")
-        status_counts[key] = int(row["count"])
-
-    # "joined" and "join" are treated as the same event depending on source schema.
-    joins = status_counts.get("joined", 0) + status_counts.get("join", 0)
-    qualified = status_counts.get("qualified", 0)
-    pending = status_counts.get("pending", 0)
-    failed_no_checkin = status_counts.get("failed_no_checkin", 0)
-    failed_not_subscribed = status_counts.get("failed_not_subscribed", 0)
-    failed_left_before_hold = status_counts.get("failed_left_before_hold", 0)
-
-    # Per-inviter aggregation — server-side.
-    pipeline_per_inviter: list[dict] = [
-        {"$match": {"event_time": {"$gte": day_start, "$lt": day_end}}},
+    # --- Daily voucher claims (proxy for new joins / engagement) ---
+    _CLAIMED_AT_EXPR = {"$ifNull": ["$claimed_at", "$claimedAt"]}
+    claims_pipeline: list[dict] = [
         {
-            "$group": {
-                "_id": "$inviter_user_id",
-                "joins": {
-                    "$sum": {
-                        "$cond": [{"$in": ["$status", ["joined", "join"]]}, 1, 0]
-                    }
+            "$match": {
+                "$expr": {
+                    "$and": [
+                        {"$gte": [_CLAIMED_AT_EXPR, day_start]},
+                        {"$lt":  [_CLAIMED_AT_EXPR, day_end]},
+                    ]
                 },
-                "qualified": {
-                    "$sum": {"$cond": [{"$eq": ["$status", "qualified"]}, 1, 0]}
-                },
-                "pending": {
-                    "$sum": {"$cond": [{"$eq": ["$status", "pending"]}, 1, 0]}
-                },
-                "failed_no_checkin": {
-                    "$sum": {"$cond": [{"$eq": ["$status", "failed_no_checkin"]}, 1, 0]}
-                },
-                "failed_left_before_hold": {
-                    "$sum": {"$cond": [{"$eq": ["$status", "failed_left_before_hold"]}, 1, 0]}
-                },
-                # Average seconds from join to qualification (only for qualified events with both timestamps).
-                "avg_qualify_seconds": {
-                    "$avg": {
-                        "$cond": [
-                            {
-                                "$and": [
-                                    {"$eq": ["$status", "qualified"]},
-                                    {"$gt": ["$qualified_at", None]},
-                                    {"$gt": ["$joined_at", None]},
-                                    {"$gte": ["$qualified_at", "$joined_at"]},
-                                ]
-                            },
-                            {
-                                "$divide": [
-                                    {"$subtract": ["$qualified_at", "$joined_at"]},
-                                    1000,  # milliseconds → seconds
-                                ]
-                            },
-                            None,
-                        ]
-                    }
-                },
+                "status": "claimed",
             }
         },
+        {"$count": "total"},
     ]
+    result = next(mongo.source("claim_events").aggregate(claims_pipeline), None)
+    daily_claims = int(result["total"]) if result else 0
 
-    inviter_stats: list[dict[str, Any]] = []
-    for row in mongo.source("referral_events").aggregate(pipeline_per_inviter):
-        inviter_id = str(row["_id"] or "unknown")
-        inv_joins = int(row.get("joins", 0))
-        inv_qualified = int(row.get("qualified", 0))
-        inv_pending = int(row.get("pending", 0))
-        inv_failed_left = int(row.get("failed_left_before_hold", 0))
-        inv_failed_no_checkin = int(row.get("failed_no_checkin", 0))
-        avg_qualify_seconds = row.get("avg_qualify_seconds")
-        avg_qualify_hours = (
-            round(avg_qualify_seconds / 3600.0, 2)
-            if avg_qualify_seconds is not None
-            else None
-        )
-        conversion = safe_divide(inv_qualified, inv_joins)
-        inviter_stats.append(
-            {
-                "inviter_user_id": inviter_id,
-                "date": day_start,
-                "joins": inv_joins,
-                "qualified": inv_qualified,
-                "pending": inv_pending,
-                "conversion_rate": conversion,
-                "avg_time_to_qualify_hours": avg_qualify_hours,
-                "suspicious_flag": suspicious_inviter(
-                    inv_joins, conversion, inv_failed_left, inv_failed_no_checkin
-                ),
-                "quality_flag": quality_flag(inv_joins, conversion),
-            }
-        )
+    # --- Top inviters from users.referral_count ---
+    top_inviters_cursor = mongo.source("users").find(
+        {"referral_count": {"$exists": True, "$gt": 0}},
+        {"_id": 1, "user_id": 1, "username": 1, "referral_count": 1},
+    ).sort("referral_count", -1).limit(10)
 
-    inviter_stats_sorted = sorted(
-        inviter_stats, key=lambda x: (x["qualified"], x["joins"]), reverse=True
-    )
-    top_inviters = inviter_stats_sorted[:5]
-    low_quality_inviters = [x for x in inviter_stats if x["quality_flag"] == "low_quality"][:5]
+    top_inviters = []
+    for row in top_inviters_cursor:
+        uid = str(row.get("user_id") or row.get("_id") or "unknown")
+        top_inviters.append({
+            "inviter_user_id": uid,
+            "username": row.get("username"),
+            "referral_count": int(row.get("referral_count", 0)),
+        })
 
+    # --- Total referral_count across all users (snapshot) ---
+    total_referral_agg = list(mongo.source("users").aggregate([
+        {"$match": {"referral_count": {"$exists": True, "$gt": 0}}},
+        {"$group": {"_id": None, "total": {"$sum": "$referral_count"}}},
+    ]))
+    total_referrals = int(total_referral_agg[0]["total"]) if total_referral_agg else 0
+
+    # --- Spike detection vs prior 7 days ---
     previous_days = list(
         mongo.derived("referral_daily").find(
             {"date": {"$gte": day_start - timedelta(days=7), "$lt": day_start}},
-            {"joins": 1},
+            {"daily_claims": 1},
         )
     )
     baseline_avg = (
-        sum(day.get("joins", 0) for day in previous_days) / len(previous_days)
-        if previous_days
-        else None
+        sum(d.get("daily_claims", 0) for d in previous_days) / len(previous_days)
+        if previous_days else None
     )
-
     suspicious_patterns: list[str] = []
-    if abnormal_spike(joins, baseline_avg):
-        suspicious_patterns.append("join_spike_vs_recent_baseline")
-    conversion_rate = safe_divide(qualified, joins)
-    if (
-        joins >= _MIN_JOINS_FOR_CONVERSION_ALERT
-        and conversion_rate is not None
-        and conversion_rate < 0.15
-    ):
-        suspicious_patterns.append("low_conversion_rate")
-
-    # Daily avg_time_to_qualify — weighted mean across all inviters with data.
-    all_qualify_hours = [
-        s["avg_time_to_qualify_hours"]
-        for s in inviter_stats
-        if s["avg_time_to_qualify_hours"] is not None
-    ]
-    daily_avg_qualify = (
-        round(sum(all_qualify_hours) / len(all_qualify_hours), 2) if all_qualify_hours else None
-    )
+    if abnormal_spike(daily_claims, baseline_avg):
+        suspicious_patterns.append("claim_spike_vs_recent_baseline")
 
     summary = {
         "date": day_start,
-        "joins": joins,
-        "qualified": qualified,
-        "pending_hold": pending,
-        "failed_no_checkin": failed_no_checkin,
-        "failed_not_subscribed": failed_not_subscribed,
-        "failed_left_before_hold": failed_left_before_hold,
-        "avg_time_to_qualify_hours": daily_avg_qualify,
-        "top_inviters": top_inviters,
-        "low_quality_inviters": low_quality_inviters,
+        "joins": daily_claims,           # voucher claims today — best proxy for daily referral activity
+        "total_referrals_snapshot": total_referrals,  # cumulative across all users
+        "qualified": None,               # not available from this schema
+        "pending_hold": None,
+        "failed_no_checkin": None,
+        "failed_not_subscribed": None,
+        "failed_left_before_hold": None,
+        "avg_time_to_qualify_hours": None,
+        "top_inviters": top_inviters[:5],
+        "low_quality_inviters": [],
         "suspicious_patterns": suspicious_patterns,
     }
 
     mongo.upsert_one("referral_daily", {"date": day_start}, summary)
-    mongo.bulk_upsert(
-        "inviter_daily",
-        [({"date": x["date"], "inviter_user_id": x["inviter_user_id"]}, x) for x in inviter_stats],
-    )
-    logger.info("Computed referral daily summary for %s", day_start.date())
+
+    # Write per-inviter rows to inviter_daily for weekly rollup
+    if top_inviters:
+        mongo.bulk_upsert(
+            "inviter_daily",
+            [
+                (
+                    {"date": day_start, "inviter_user_id": inv["inviter_user_id"]},
+                    {**inv, "date": day_start, "joins": inv["referral_count"]},
+                )
+                for inv in top_inviters
+            ],
+        )
+
+    logger.info("Computed referral daily summary for %s: claims=%d total_referrals=%d",
+                day_start.date(), daily_claims, total_referrals)
     return summary
+
 
 
 def compute_referral_weekly(mongo: MongoService, for_date: datetime) -> dict[str, Any]:

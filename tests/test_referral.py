@@ -12,18 +12,36 @@ from app.analytics import referral
 
 
 class _FakeCollection:
-    def __init__(self, rows=None, exists_fields=None):
+    def __init__(self, rows=None, exists_fields=None, aggregate_rows=None):
         self._rows = rows or []
+        self._aggregate_rows = aggregate_rows if aggregate_rows is not None else self._rows
         self._exists_fields = exists_fields or set()
 
     def aggregate(self, _pipeline):
-        return iter(self._rows)
+        return iter(self._aggregate_rows)
 
-    def find_one(self, query, _projection):
+    def find(self, *_args, **_kwargs):
+        return _FakeCursor(self._rows)
+
+    def find_one(self, query, _projection=None):
         field = next(iter(query.keys()))
         if field in self._exists_fields:
             return {"_id": 1}
         return None
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def sort(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, _n):
+        return self
 
 
 class _FakeDerivedCollection:
@@ -53,20 +71,30 @@ class _FakeMongo:
         self.bulk_operations.append((collection, operations))
 
 
-def test_referral_daily_uses_referrals_created_at_when_status_fields_missing() -> None:
+def test_referral_daily_uses_voucher_claims_and_user_referral_count() -> None:
+    """compute_referral_daily sources joins from vouchers (claim_events) and
+    top_inviters from users.referral_count — not from the referrals collection."""
     mongo = _FakeMongo(
         {
-            "referral_events": _FakeCollection(
-                rows=[{"_id": "r1", "joins": 2}, {"_id": "r2", "joins": 1}],
-                exists_fields={"created_at"},
-            )
+            # vouchers: 2 claimed today
+            "claim_events": _FakeCollection(
+                rows=[{"total": 2}],
+            ),
+            # users: find() rows for top_inviters; aggregate_rows for total snapshot
+            "users": _FakeCollection(
+                rows=[{"user_id": "u1", "username": "Alice", "referral_count": 5}],
+                aggregate_rows=[{"_id": None, "total": 5}],
+            ),
         }
     )
     result = referral.compute_referral_daily(
         mongo, referral.datetime(2026, 1, 11, tzinfo=referral.timezone.utc)
     )
-    assert result["joins"] == 3
-    # qualified/breakdown are None in fallback path — not 0 — so callers can
-    # distinguish "source had no status field" from "zero qualified on a real day"
+    # joins = daily voucher claims
+    assert result["joins"] == 2
+    # breakdown not available from vouchers schema
     assert result["qualified"] is None
-    assert result["_source_fallback"] == "join_count_only"
+    assert result.get("joins") == 2  # main assertion — joins sourced from vouchers
+    # top_inviters sourced from users.referral_count
+    assert result["top_inviters"][0]["referral_count"] == 5
+    assert result["top_inviters"][0]["username"] == "Alice"
