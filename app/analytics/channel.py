@@ -13,6 +13,21 @@ logger = logging.getLogger(__name__)
 
 def compute_channel_daily(mongo: MongoService, for_date: datetime) -> dict[str, Any]:
     day_start, day_end = day_bounds_utc(for_date.astimezone(timezone.utc))
+    logger.info("Channel source resolution: events=%s", "channel_events")
+    if hasattr(mongo, "has_source_collection") and not mongo.has_source_collection("channel_events"):
+        logger.warning("Channel source collection not available: %s", "channel_events")
+        summary = {
+            "date": day_start,
+            "new_joins": 0,
+            "leaves": 0,
+            "net_growth": 0,
+            "active_subscribers": None,
+            "referred_joins": 0,
+            "non_referred_joins": 0,
+            "churn_signals": [],
+        }
+        mongo.upsert_one("channel_daily", {"date": day_start}, summary)
+        return summary
 
     # Server-side aggregation — avoids pulling all events into Python memory.
     pipeline: list[dict] = [

@@ -29,9 +29,16 @@ class MongoService:
         self.db: Database = self.client[settings.mongodb_db_name]
         self.source_db: Database = self.client[settings.mongodb_source_db_name]
 
+    def source_collection_name(self, name: str) -> str:
+        return getattr(settings.source_collections, name)
+
     def source(self, name: str) -> Collection:
-        collection_name = getattr(settings.source_collections, name)
-        return self.source_db[collection_name]   
+        collection_name = self.source_collection_name(name)
+        return self.source_db[collection_name]
+
+    def has_source_collection(self, name: str) -> bool:
+        collection_name = self.source_collection_name(name)
+        return collection_name in self.source_db.list_collection_names()
 
     def derived(self, name: str) -> Collection:
         collection_name = getattr(settings.derived_collections, name)

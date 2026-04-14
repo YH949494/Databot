@@ -15,8 +15,85 @@ logger = logging.getLogger(__name__)
 _MIN_JOINS_FOR_CONVERSION_ALERT = 10
 
 
+def _field_exists(mongo: MongoService, collection: str, field_name: str) -> bool:
+    return mongo.source(collection).find_one({field_name: {"$exists": True}}, {"_id": 1}) is not None
+
+
 def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str, Any]:
     day_start, day_end = day_bounds_utc(for_date.astimezone(timezone.utc))
+    logger.info("Referral source resolution: events=%s", "referral_events")
+    has_status = _field_exists(mongo, "referral_events", "status")
+    has_event_time = _field_exists(mongo, "referral_events", "event_time")
+    has_created_at = _field_exists(mongo, "referral_events", "created_at")
+
+    if not has_status or not has_event_time:
+        if not has_created_at:
+            logger.warning(
+                "Referral source unavailable for daily status metrics: collection=%s required_fields=status+event_time or created_at",
+                "referral_events",
+            )
+            summary = {
+                "date": day_start,
+                "joins": 0,
+                "qualified": 0,
+                "pending_hold": 0,
+                "failed_no_checkin": 0,
+                "failed_not_subscribed": 0,
+                "failed_left_before_hold": 0,
+                "avg_time_to_qualify_hours": None,
+                "top_inviters": [],
+                "low_quality_inviters": [],
+                "suspicious_patterns": [],
+            }
+            mongo.upsert_one("referral_daily", {"date": day_start}, summary)
+            return summary
+
+        logger.warning(
+            "Referral status fields not available; using created_at join-only aggregation from %s",
+            "referral_events",
+        )
+        join_pipeline: list[dict] = [
+            {"$match": {"created_at": {"$gte": day_start, "$lt": day_end}}},
+            {"$group": {"_id": "$referrer_user_id", "joins": {"$sum": 1}}},
+        ]
+        inviter_stats = []
+        total_joins = 0
+        for row in mongo.source("referral_events").aggregate(join_pipeline):
+            joins = int(row.get("joins", 0))
+            total_joins += joins
+            inviter_stats.append(
+                {
+                    "inviter_user_id": str(row.get("_id") or "unknown"),
+                    "date": day_start,
+                    "joins": joins,
+                    "qualified": 0,
+                    "pending": 0,
+                    "conversion_rate": None,
+                    "avg_time_to_qualify_hours": None,
+                    "suspicious_flag": False,
+                    "quality_flag": "insufficient_data",
+                }
+            )
+        inviter_stats_sorted = sorted(inviter_stats, key=lambda x: x["joins"], reverse=True)
+        summary = {
+            "date": day_start,
+            "joins": total_joins,
+            "qualified": 0,
+            "pending_hold": 0,
+            "failed_no_checkin": 0,
+            "failed_not_subscribed": 0,
+            "failed_left_before_hold": 0,
+            "avg_time_to_qualify_hours": None,
+            "top_inviters": inviter_stats_sorted[:5],
+            "low_quality_inviters": [],
+            "suspicious_patterns": [],
+        }
+        mongo.upsert_one("referral_daily", {"date": day_start}, summary)
+        mongo.bulk_upsert(
+            "inviter_daily",
+            [({"date": x["date"], "inviter_user_id": x["inviter_user_id"]}, x) for x in inviter_stats],
+        )
+        return summary
 
     # Server-side aggregation — avoids pulling all documents into Python memory.
     pipeline_status_counts: list[dict] = [
