@@ -41,6 +41,7 @@ class Settings(BaseSettings):
 
     mongodb_uri: str = Field(..., alias="MONGODB_URI")
     mongodb_db_name: str = Field(..., alias="MONGODB_DB_NAME")
+    mongodb_source_db_name: str = Field("", alias="MONGODB_SOURCE_DB_NAME")
 
     tg_growth_bot_token: str = Field(..., alias="TG_GROWTH_BOT_TOKEN")
     tg_report_chat_id: int = Field(..., alias="TG_REPORT_CHAT_ID")
@@ -63,6 +64,8 @@ class Settings(BaseSettings):
     @property
     def admin_user_ids(self) -> list[int]:
         return [int(user_id.strip()) for user_id in self.tg_admin_user_ids.split(",") if user_id.strip()]
-
+    def source_db_name(self) -> str:
+        # Falls back to same DB if not set
+        return self.mongodb_source_db_name or self.mongodb_db_name
 
 settings = Settings()
