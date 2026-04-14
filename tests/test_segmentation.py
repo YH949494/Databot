@@ -57,6 +57,9 @@ class _FakeCollection:
     def aggregate(self, _pipeline):
         return iter(self._rows)
 
+    def find(self, _query, _projection):
+        return iter(self._rows)
+
     def find_one(self, query, _projection):
         field = next(iter(query.keys()))
         if field in self._exists_fields:
@@ -135,6 +138,7 @@ def test_cost_per_active_player_logic() -> None:
     mongo = _FakeMongo(
         {
             "claim_events": _FakeCollection(rows=[{"_id": "u1"}, {"_id": "u2"}], exists_fields={"bet_amount", "voucher_value"}),
+            "users": _FakeCollection(rows=[]),
         }
     )
 
@@ -169,5 +173,116 @@ def test_cost_per_active_player_logic() -> None:
         mongo._collections["claim_events"] = _ClaimEventsCollection(exists_fields={"bet_amount", "voucher_value"})
         segmentation.compute_segmentation_kpis(mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc))
         assert mongo.last_upsert["cost_per_active_player"] == 100.0
+    finally:
+        segmentation._user_ids_for_day = original
+
+
+def test_referral_counts_use_referrals_referrer_user_id() -> None:
+    mongo = _FakeMongo(
+        {
+            "claim_events": _FakeCollection(
+                rows=[
+                    {
+                        "_id": {"user_id": "u1", "username_lower": None},
+                        "total_claims": 2,
+                        "last_claim_at": segmentation.datetime(2026, 1, 10, tzinfo=segmentation.timezone.utc),
+                        "first_claim_at": segmentation.datetime(2026, 1, 1, tzinfo=segmentation.timezone.utc),
+                    }
+                ]
+            ),
+            "referral_events": _FakeCollection(rows=[{"_id": "u1", "referral_count": 3}]),
+            "users": _FakeCollection(rows=[{"user_id": "u1", "username": "Alpha"}]),
+        }
+    )
+    segmentation.compute_user_profiles(mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc))
+    assert mongo.operations[0][1]["referral_count"] == 3
+
+
+def test_claim_user_linkage_uses_username_lower_read_side_only() -> None:
+    mongo = _FakeMongo(
+        {
+            "claim_events": _FakeCollection(
+                rows=[
+                    {
+                        "_id": {"user_id": None, "username_lower": "alpha"},
+                        "total_claims": 4,
+                        "last_claim_at": segmentation.datetime(2026, 1, 10, tzinfo=segmentation.timezone.utc),
+                        "first_claim_at": segmentation.datetime(2026, 1, 1, tzinfo=segmentation.timezone.utc),
+                    }
+                ],
+                exists_fields={"result"},
+            ),
+            "referral_events": _FakeCollection(rows=[]),
+            "users": _FakeCollection(rows=[{"user_id": "u1", "username": "Alpha"}]),
+        }
+    )
+    segmentation.compute_user_profiles(mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc))
+    assert mongo.operations[0][1]["user_id"] == "u1"
+
+
+def test_segmentation_kpis_claim_users_from_real_claim_source_shape() -> None:
+    mongo = _FakeMongo(
+        {
+            "claim_events": _FakeCollection(
+                rows=[{"_id": {"user_id": None, "username_lower": "alpha"}}],
+                exists_fields={"bet_amount"},
+            ),
+            "users": _FakeCollection(rows=[{"user_id": "u1", "username": "Alpha"}]),
+        }
+    )
+
+    def _fake_user_ids_for_day(_mongo, _start, _end):
+        return {"u1"}
+
+    original = segmentation._user_ids_for_day
+    segmentation._user_ids_for_day = _fake_user_ids_for_day
+    try:
+        segmentation.compute_segmentation_kpis(mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc))
+        assert mongo.last_upsert["claim_to_play_conversion"] == 1.0
+    finally:
+        segmentation._user_ids_for_day = original
+
+
+def test_profiles_use_claimed_at_camel_case_from_voucher_claims() -> None:
+    mongo = _FakeMongo(
+        {
+            "claim_events": _FakeCollection(
+                rows=[
+                    {
+                        "_id": {"user_id": None, "username_lower": "alpha"},
+                        "total_claims": 3,
+                        "last_claim_at": segmentation.datetime(2026, 1, 10, tzinfo=segmentation.timezone.utc),
+                        "first_claim_at": segmentation.datetime(2026, 1, 2, tzinfo=segmentation.timezone.utc),
+                    }
+                ],
+                exists_fields={"claimedAt"},
+            ),
+            "referral_events": _FakeCollection(rows=[]),
+            "users": _FakeCollection(rows=[{"user_id": "u1", "username": "Alpha"}]),
+        }
+    )
+    counts = segmentation.compute_user_profiles(
+        mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc)
+    )
+    assert counts["unknown"] == 0
+    assert mongo.operations[0][1]["last_active_days"] == 1
+
+
+def test_kpis_use_claimed_at_camel_case_and_claimed_by_linkage() -> None:
+    mongo = _FakeMongo(
+        {
+            "claim_events": _FakeCollection(
+                rows=[{"_id": {"user_id": None, "username_lower": "alpha"}}],
+                exists_fields={"claimedAt", "bet_amount"},
+            ),
+            "users": _FakeCollection(rows=[{"user_id": "u1", "username": "Alpha"}]),
+        }
+    )
+
+    original = segmentation._user_ids_for_day
+    segmentation._user_ids_for_day = lambda *_args, **_kwargs: {"u1"}
+    try:
+        segmentation.compute_segmentation_kpis(mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc))
+        assert mongo.last_upsert["claim_to_play_conversion"] == 1.0
     finally:
         segmentation._user_ids_for_day = original

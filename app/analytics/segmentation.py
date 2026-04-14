@@ -12,6 +12,10 @@ from app.utils.time import day_bounds_utc
 logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 500  # docs flushed per bulk_write call
+_CLAIMED_AT_EXPR: dict[str, Any] = {"$ifNull": ["$claimed_at", "$claimedAt"]}
+_USERNAME_LOWER_EXPR: dict[str, Any] = {
+    "$ifNull": ["$usernameLower", {"$ifNull": ["$username_lower", "$claimedBy"]}]
+}
 
 
 def _resolve_user_id(raw: Any) -> str | None:
@@ -33,22 +37,63 @@ def _field_exists(mongo: MongoService, collection: str, field_name: str) -> bool
     return mongo.source(collection).find_one({field_name: {"$exists": True}}, {"_id": 1}) is not None
 
 
+def _user_id_by_username_lower(mongo: MongoService) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for row in mongo.source("users").find({}, {"_id": 1, "user_id": 1, "username": 1}):
+        username = row.get("username")
+        if username is None:
+            continue
+        user_id = _resolve_user_id(row.get("user_id") or row.get("_id"))
+        if user_id is None:
+            continue
+        mapping[str(username).strip().lower()] = user_id
+    return mapping
+
+
+def _resolve_claim_user_id(row: dict[str, Any], username_map: dict[str, str]) -> str | None:
+    claim_id = row.get("_id")
+    if isinstance(claim_id, dict):
+        direct = _resolve_user_id(claim_id.get("user_id"))
+        username_lower = claim_id.get("username_lower")
+    else:
+        direct = _resolve_user_id(row.get("user_id") or claim_id)
+        username_lower = row.get("username_lower")
+    if direct:
+        return direct
+    if username_lower is None:
+        return None
+    return username_map.get(str(username_lower).strip().lower())
+
+
 def _user_ids_for_day(mongo: MongoService, day_start: datetime, day_end: datetime) -> set[str]:
+    has_claimed_time = _field_exists(mongo, "claim_events", "claimed_at") or _field_exists(mongo, "claim_events", "claimedAt")
+    if not has_claimed_time:
+        logger.warning("Claim timestamp field unavailable in %s; cannot compute play users", "claim_events")
+        return set()
+    username_map = _user_id_by_username_lower(mongo)
     pipeline: list[dict[str, Any]] = [
         {
             "$match": {
-                "claimed_at": {"$gte": day_start, "$lt": day_end},
+                "$expr": {"$and": [{"$gte": [_CLAIMED_AT_EXPR, day_start]}, {"$lt": [_CLAIMED_AT_EXPR, day_end]}]},
                 "bet_amount": {"$gt": 0},
             }
         },
-        {"$group": {"_id": "$user_id"}},
+        {"$group": {"_id": {"user_id": "$user_id", "username_lower": _USERNAME_LOWER_EXPR}}},
     ]
-    return {str(row["_id"]) for row in mongo.source("claim_events").aggregate(pipeline) if row.get("_id") is not None}
+    user_ids: set[str] = set()
+    for row in mongo.source("claim_events").aggregate(pipeline):
+        uid = _resolve_claim_user_id(row, username_map)
+        if uid is not None:
+            user_ids.add(uid)
+    return user_ids
 
 
 def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, int]:
     day_start, _ = day_bounds_utc(for_date.astimezone(timezone.utc))
     now = datetime.now(timezone.utc)
+    username_map = _user_id_by_username_lower(mongo)
+
+    logger.info("Segmentation source resolution: claims=%s referrals=%s users=%s", "claim_events", "referral_events", "users")
 
     has_bet_amount = _field_exists(mongo, "claim_events", "bet_amount")
     has_result = _field_exists(mongo, "claim_events", "result")
@@ -62,10 +107,10 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
     claim_pipeline: list[dict[str, Any]] = [
         {
             "$group": {
-                "_id": "$user_id",
+                "_id": {"user_id": "$user_id", "username_lower": _USERNAME_LOWER_EXPR},
                 "total_claims": {"$sum": 1},
-                "last_claim_at": {"$max": "$claimed_at"},
-                "first_claim_at": {"$min": "$claimed_at"},
+                "last_claim_at": {"$max": _CLAIMED_AT_EXPR},
+                "first_claim_at": {"$min": _CLAIMED_AT_EXPR},
                 "total_bet": {
                     "$sum": {
                         "$cond": [
@@ -91,12 +136,17 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
     ]
     claim_rows: dict[str, Any] = {}
     for row in mongo.source("claim_events").aggregate(claim_pipeline):
-        uid = _resolve_user_id(row.get("user_id") or row.get("_id"))
+        uid = _resolve_claim_user_id(row, username_map)
         if uid:
             claim_rows[uid] = row
 
     referral_pipeline: list[dict[str, Any]] = [
-        {"$group": {"_id": "$inviter_user_id", "referral_count": {"$sum": 1}}}
+        {
+            "$group": {
+                "_id": {"$ifNull": ["$referrer_user_id", "$inviter_user_id"]},
+                "referral_count": {"$sum": 1},
+            }
+        }
     ]
     referral_rows: dict[str, int] = {}
     for row in mongo.source("referral_events").aggregate(referral_pipeline):
@@ -213,19 +263,24 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
 
 def compute_segmentation_kpis(mongo: MongoService, for_date: datetime) -> dict[str, Any]:
     day_start, day_end = day_bounds_utc(for_date.astimezone(timezone.utc))
+    username_map = _user_id_by_username_lower(mongo)
+    has_claimed_time = _field_exists(mongo, "claim_events", "claimed_at") or _field_exists(mongo, "claim_events", "claimedAt")
 
     has_bet_amount = _field_exists(mongo, "claim_events", "bet_amount")
     has_voucher_value = _field_exists(mongo, "claim_events", "voucher_value")
 
+    if not has_claimed_time:
+        logger.warning("Claim timestamp field unavailable in %s; claim-derived KPIs may be null", "claim_events")
+
     claims_pipeline = [
-        {"$match": {"claimed_at": {"$gte": day_start, "$lt": day_end}}},
-        {"$group": {"_id": "$user_id"}},
+        {"$match": {"$expr": {"$and": [{"$gte": [_CLAIMED_AT_EXPR, day_start]}, {"$lt": [_CLAIMED_AT_EXPR, day_end]}]}}},
+        {"$group": {"_id": {"user_id": "$user_id", "username_lower": _USERNAME_LOWER_EXPR}}},
     ]
-    claimed_users = {
-        str(row["_id"])
-        for row in mongo.source("claim_events").aggregate(claims_pipeline)
-        if row.get("_id") is not None
-    }
+    claimed_users = set()
+    for row in mongo.source("claim_events").aggregate(claims_pipeline):
+        uid = _resolve_claim_user_id(row, username_map)
+        if uid is not None:
+            claimed_users.add(uid)
 
     claim_to_play_conversion = None
     d3_retention_rate = None
@@ -247,10 +302,12 @@ def compute_segmentation_kpis(mongo: MongoService, for_date: datetime) -> dict[s
         d7_target_start, d7_target_end = day_bounds_utc(day_start)
         d7_retained = _user_ids_for_day(mongo, d7_target_start, d7_target_end)
         d7_retention_rate = safe_divide(len(d7_cohort & d7_retained), len(d7_cohort))
+    else:
+        logger.warning("Gameplay source fields unavailable in %s: bet_amount missing; play/result KPIs set to null", "claim_events")
 
     if has_bet_amount and has_voucher_value:
         voucher_pipeline: list[dict[str, Any]] = [
-            {"$match": {"claimed_at": {"$gte": day_start, "$lt": day_end}}},
+            {"$match": {"$expr": {"$and": [{"$gte": [_CLAIMED_AT_EXPR, day_start]}, {"$lt": [_CLAIMED_AT_EXPR, day_end]}]}}},
             {
                 "$group": {
                     "_id": None,
