@@ -38,15 +38,19 @@ def _field_exists(mongo: MongoService, collection: str, field_name: str) -> bool
 
 
 def _user_id_by_username_lower(mongo: MongoService) -> dict[str, str]:
+    """Build username_lower -> user_id map. Users collection stores 'username';
+    vouchers link via usernameLower / claimedBy (already lowercased)."""
     mapping: dict[str, str] = {}
-    for row in mongo.source("users").find({}, {"_id": 1, "user_id": 1, "username": 1}):
-        username = row.get("username")
-        if username is None:
+    for row in mongo.source("users").find({}, {"_id": 1, "user_id": 1, "username": 1, "usernameLower": 1}):
+        username_lower = row.get("usernameLower") or (
+            str(row["username"]).strip().lower() if row.get("username") else None
+        )
+        if username_lower is None:
             continue
         user_id = _resolve_user_id(row.get("user_id") or row.get("_id"))
         if user_id is None:
             continue
-        mapping[str(username).strip().lower()] = user_id
+        mapping[username_lower] = user_id
     return mapping
 
 
@@ -140,16 +144,13 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
         if uid:
             claim_rows[uid] = row
 
-    referral_pipeline: list[dict[str, Any]] = [
-        {
-            "$group": {
-                "_id": {"$ifNull": ["$referrer_user_id", "$inviter_user_id"]},
-                "referral_count": {"$sum": 1},
-            }
-        }
-    ]
+    # referral_count is stored directly on each user doc — read it from users
+    # rather than aggregating the referrals collection.
     referral_rows: dict[str, int] = {}
-    for row in mongo.source("referral_events").aggregate(referral_pipeline):
+    for row in mongo.source("users").find(
+        {"referral_count": {"$exists": True, "$gt": 0}},
+        {"_id": 1, "user_id": 1, "referral_count": 1},
+    ):
         uid = _resolve_user_id(row.get("user_id") or row.get("_id"))
         if uid:
             referral_rows[uid] = int(row.get("referral_count", 0))
@@ -217,8 +218,12 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
         action_tag = action_for_segment(segment)
         segment_counts[segment] = segment_counts.get(segment, 0) + 1
 
+        meta = user_meta.get(user_id, {})
         return {
             "user_id": user_id,
+            "username": meta.get("username"),
+            "xp": meta.get("xp"),
+            "region": meta.get("region"),
             "total_claims": total_claims,
             "last_active_days": last_active_days,
             "total_bet": total_bet,
@@ -232,12 +237,17 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
 
     # Stream users collection only to count users with no claim history.
     users_seen: set[str] = set()
+    # Also build a uid -> {xp, region} map for profile enrichment
+    user_meta: dict[str, dict] = {}
     users_cursor = mongo.source("users").aggregate(
         [
             {
                 "$project": {
                     "_id": 0,
                     "user_id": {"$ifNull": ["$user_id", {"$toString": "$_id"}]},
+                    "xp": 1,
+                    "region": 1,
+                    "username": 1,
                 }
             }
         ]
@@ -247,6 +257,7 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
         if not uid or uid in users_seen:
             continue
         users_seen.add(uid)
+        user_meta[uid] = {"xp": row.get("xp"), "region": row.get("region"), "username": row.get("username")}
         if uid not in claim_rows:
             segment_counts["no_claim_history"] += 1
 

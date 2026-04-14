@@ -10,10 +10,10 @@ class SourceCollections(BaseSettings):
     # Defaults aligned with .env.example canonical names.
     # If your deployment still uses legacy names (referrals / voucher_claims)
     # set REFERRAL_EVENTS_COLLECTION / CLAIM_EVENTS_COLLECTION in env explicitly.
-    referral_events: str = Field("referral_events", alias="REFERRAL_EVENTS_COLLECTION")
+    referral_events: str = Field("referrals", alias="REFERRAL_EVENTS_COLLECTION")
     referral_kpi: str = Field("referral_kpis", alias="REFERRAL_KPI_COLLECTION")
     users: str = Field("users", alias="USER_COLLECTION")
-    claim_events: str = Field("claim_events", alias="CLAIM_EVENTS_COLLECTION")
+    claim_events: str = Field("vouchers", alias="CLAIM_EVENTS_COLLECTION")
     post_logs: str = Field("post_logs", alias="POST_LOG_COLLECTION")
     channel_events: str = Field("channel_events", alias="CHANNEL_EVENTS_COLLECTION")
 

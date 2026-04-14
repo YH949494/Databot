@@ -178,6 +178,8 @@ def test_cost_per_active_player_logic() -> None:
 
 
 def test_referral_counts_use_referrals_referrer_user_id() -> None:
+    """referral_count is read directly from the users doc (field added by referral_bot),
+    not aggregated from referral_events — matches the real referral_bot schema."""
     mongo = _FakeMongo(
         {
             "claim_events": _FakeCollection(
@@ -190,8 +192,9 @@ def test_referral_counts_use_referrals_referrer_user_id() -> None:
                     }
                 ]
             ),
-            "referral_events": _FakeCollection(rows=[{"_id": "u1", "referral_count": 3}]),
-            "users": _FakeCollection(rows=[{"user_id": "u1", "username": "Alpha"}]),
+            "referral_events": _FakeCollection(rows=[]),
+            # referral_count lives on the users doc in the real schema
+            "users": _FakeCollection(rows=[{"user_id": "u1", "username": "Alpha", "referral_count": 3}]),
         }
     )
     segmentation.compute_user_profiles(mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc))
