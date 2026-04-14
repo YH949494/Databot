@@ -71,6 +71,7 @@ def build_daily_report(
             f"- Dead: {(segmentation or {}).get('dead', 0)}  → aggressive_reactivation",
             f"- High value: {(segmentation or {}).get('high_value', 0)}  → vip_treatment",
             f"- Unknown: {(segmentation or {}).get('unknown', 0)}  → no_action",
+            f"- No claim history: {(segmentation or {}).get('no_claim_history', 0)}  → excluded_from_main_segments",
             "",
             "KPIs",
             f"- Claim→Play conversion: {_fmt_pct((segmentation_kpis or {}).get('claim_to_play_conversion'))}",

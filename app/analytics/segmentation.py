@@ -112,13 +112,15 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
     # _BATCH_SIZE documents.  Peak additional RAM ≈ _BATCH_SIZE × ~512 B. #
     # ------------------------------------------------------------------ #
     segment_counts: dict[str, int] = {
-        "new": 0, "active": 0, "at_risk": 0, "dead": 0, "high_value": 0, "unknown": 0
+        "new": 0,
+        "active": 0,
+        "at_risk": 0,
+        "dead": 0,
+        "high_value": 0,
+        "unknown": 0,
+        "no_claim_history": 0,
     }
     batch: list[tuple[dict[str, Any], dict[str, Any]]] = []
-
-    # Track which user_ids we have seen so we can later add any that only
-    # appear in claim_rows / referral_rows but not in the users collection.
-    seen_ids: set[str] = set()
 
     def _flush(b: list) -> None:
         if b:
@@ -178,7 +180,8 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
             "computed_at": now,
         }
 
-    # Pass 1: stream users collection
+    # Stream users collection only to count users with no claim history.
+    users_seen: set[str] = set()
     users_cursor = mongo.source("users").aggregate(
         [
             {
@@ -191,16 +194,14 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
     )
     for row in users_cursor:
         uid = _resolve_user_id(row.get("user_id") or row.get("_id"))
-        if not uid:
+        if not uid or uid in users_seen:
             continue
-        seen_ids.add(uid)
-        batch.append(({"user_id": uid}, _build_doc(uid)))
-        if len(batch) >= _BATCH_SIZE:
-            _flush(batch)
+        users_seen.add(uid)
+        if uid not in claim_rows:
+            segment_counts["no_claim_history"] += 1
 
-    # Pass 2: users that only appear in claim_rows or referral_rows
-    orphan_ids = (set(claim_rows) | set(referral_rows)) - seen_ids
-    for uid in orphan_ids:
+    # Build profiles only for users with claim history.
+    for uid in claim_rows.keys():
         batch.append(({"user_id": uid}, _build_doc(uid)))
         if len(batch) >= _BATCH_SIZE:
             _flush(batch)
