@@ -14,6 +14,21 @@ logger = logging.getLogger(__name__)
 _BATCH_SIZE = 500  # docs flushed per bulk_write call
 
 
+def _resolve_user_id(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        if "user_id" in raw:
+            return _resolve_user_id(raw.get("user_id"))
+        if "_id" in raw:
+            return _resolve_user_id(raw.get("_id"))
+        if len(raw) == 1:
+            return _resolve_user_id(next(iter(raw.values())))
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
 def _field_exists(mongo: MongoService, collection: str, field_name: str) -> bool:
     return mongo.source(collection).find_one({field_name: {"$exists": True}}, {"_id": 1}) is not None
 
@@ -74,20 +89,20 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
             }
         }
     ]
-    claim_rows: dict[str, Any] = {
-        str(row["_id"]): row
-        for row in mongo.source("claim_events").aggregate(claim_pipeline)
-        if row.get("_id") is not None
-    }
+    claim_rows: dict[str, Any] = {}
+    for row in mongo.source("claim_events").aggregate(claim_pipeline):
+        uid = _resolve_user_id(row.get("user_id") or row.get("_id"))
+        if uid:
+            claim_rows[uid] = row
 
     referral_pipeline: list[dict[str, Any]] = [
         {"$group": {"_id": "$inviter_user_id", "referral_count": {"$sum": 1}}}
     ]
-    referral_rows: dict[str, int] = {
-        str(row["_id"]): int(row.get("referral_count", 0))
-        for row in mongo.source("referral_events").aggregate(referral_pipeline)
-        if row.get("_id") is not None
-    }
+    referral_rows: dict[str, int] = {}
+    for row in mongo.source("referral_events").aggregate(referral_pipeline):
+        uid = _resolve_user_id(row.get("user_id") or row.get("_id"))
+        if uid:
+            referral_rows[uid] = int(row.get("referral_count", 0))
 
     # ------------------------------------------------------------------ #
     # Stream the users collection one document at a time.                 #
@@ -107,7 +122,7 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
 
     def _flush(b: list) -> None:
         if b:
-            mongo.bulk_upsert("user_profile_summary", b)
+            mongo.bulk_upsert("user_profile_summary", list(b))
             b.clear()
 
     def _build_doc(user_id: str) -> dict[str, Any]:
@@ -136,8 +151,8 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
                 total_bet = float(claim.get("total_bet", 0.0))
 
             if has_result:
-                result_count = int(claim.get("result_count", 0))
-                if result_count > 0 and total_claims > 0:
+                result_count = int(claim.get("result_count", 0) or 0)
+                if result_count > 0:
                     win_rate = int(claim.get("win_count", 0)) / result_count
                     if win_rate >= 0.55:
                         win_loss_pattern = "winning"
@@ -175,7 +190,7 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
         ]
     )
     for row in users_cursor:
-        uid = str(row.get("user_id") or "")
+        uid = _resolve_user_id(row.get("user_id") or row.get("_id"))
         if not uid:
             continue
         seen_ids.add(uid)
