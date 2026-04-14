@@ -26,8 +26,8 @@ class MongoService:
             socketTimeoutMS=_SOCKET_TIMEOUT_MS,
             serverSelectionTimeoutMS=_SERVER_SELECTION_TIMEOUT_MS,
         )
-        self.db: Database = self.client[settings.mongodb_db_name]         
-        self.source_db: Database = self.client[settings.source_db_name]   
+        self.db: Database = self.client[settings.mongodb_db_name]
+        self.source_db: Database = self.client[settings.mongodb_source_db_name]
 
     def source(self, name: str) -> Collection:
         collection_name = getattr(settings.source_collections, name)
