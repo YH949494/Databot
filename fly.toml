@@ -9,7 +9,7 @@ primary_region = "sin"
   LOG_LEVEL = "INFO"
   TZ = "Asia/Kuala_Lumpur"
   SCHEDULER_ENABLED = "true"
-  SCHEDULE_DAILY_CRON = "12 06 * * *"
+  SCHEDULE_DAILY_CRON = "18 06 * * *"
   SCHEDULE_WEEKLY_CRON = "20 0 * * 1"
 
 [processes]
