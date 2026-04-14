@@ -49,6 +49,7 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
       MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      MONGODB_DB_NAME: ${{ secrets.MONGODB_DB_NAME }}   # add this
       TG_GROWTH_BOT_TOKEN: ${{ secrets.TG_GROWTH_BOT_TOKEN }}
       TG_REPORT_CHAT_ID: ${{ secrets.TG_REPORT_CHAT_ID }}
       TG_ADMIN_USER_IDS: ${{ secrets.TG_ADMIN_USER_IDS }}
