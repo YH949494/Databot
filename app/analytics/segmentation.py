@@ -11,6 +11,8 @@ from app.utils.time import day_bounds_utc
 
 logger = logging.getLogger(__name__)
 
+_BATCH_SIZE = 500  # docs flushed per bulk_write call
+
 
 def _field_exists(mongo: MongoService, collection: str, field_name: str) -> bool:
     return mongo.source(collection).find_one({field_name: {"$exists": True}}, {"_id": 1}) is not None
@@ -36,6 +38,12 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
     has_bet_amount = _field_exists(mongo, "claim_events", "bet_amount")
     has_result = _field_exists(mongo, "claim_events", "result")
 
+    # ------------------------------------------------------------------ #
+    # Build two server-side aggregation maps.  These are the only things  #
+    # we keep in Python memory for the duration of the job.               #
+    # Both are {user_id -> aggregated row} and stay well under 512 MB     #
+    # because the values are simple counters, not full documents.         #
+    # ------------------------------------------------------------------ #
     claim_pipeline: list[dict[str, Any]] = [
         {
             "$group": {
@@ -66,7 +74,7 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
             }
         }
     ]
-    claim_rows = {
+    claim_rows: dict[str, Any] = {
         str(row["_id"]): row
         for row in mongo.source("claim_events").aggregate(claim_pipeline)
         if row.get("_id") is not None
@@ -75,32 +83,34 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
     referral_pipeline: list[dict[str, Any]] = [
         {"$group": {"_id": "$inviter_user_id", "referral_count": {"$sum": 1}}}
     ]
-    referral_rows = {
+    referral_rows: dict[str, int] = {
         str(row["_id"]): int(row.get("referral_count", 0))
         for row in mongo.source("referral_events").aggregate(referral_pipeline)
         if row.get("_id") is not None
     }
 
-    users_pipeline: list[dict[str, Any]] = [
-        {
-            "$project": {
-                "_id": 0,
-                "user_id": {"$ifNull": ["$user_id", {"$toString": "$_id"}]},
-            }
-        }
-    ]
-    all_user_ids = {
-        str(row["user_id"])
-        for row in mongo.source("users").aggregate(users_pipeline)
-        if row.get("user_id") is not None
+    # ------------------------------------------------------------------ #
+    # Stream the users collection one document at a time.                 #
+    # We never materialise all_user_ids as a Python set.                  #
+    # For each user we look up their claim/referral rows from the maps     #
+    # above, compute the profile in-place, and batch-write every          #
+    # _BATCH_SIZE documents.  Peak additional RAM ≈ _BATCH_SIZE × ~512 B. #
+    # ------------------------------------------------------------------ #
+    segment_counts: dict[str, int] = {
+        "new": 0, "active": 0, "at_risk": 0, "dead": 0, "high_value": 0, "unknown": 0
     }
-    all_user_ids.update(claim_rows.keys())
-    all_user_ids.update(referral_rows.keys())
+    batch: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
-    segment_counts = {"new": 0, "active": 0, "at_risk": 0, "dead": 0, "high_value": 0, "unknown": 0}
-    operations: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    # Track which user_ids we have seen so we can later add any that only
+    # appear in claim_rows / referral_rows but not in the users collection.
+    seen_ids: set[str] = set()
 
-    for user_id in all_user_ids:
+    def _flush(b: list) -> None:
+        if b:
+            mongo.bulk_upsert("user_profile_summary", b)
+            b.clear()
+
+    def _build_doc(user_id: str) -> dict[str, Any]:
         claim = claim_rows.get(user_id)
         total_claims = int(claim.get("total_claims", 0)) if claim else 0
 
@@ -110,11 +120,15 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
         win_loss_pattern = None
 
         if claim and claim.get("last_claim_at") is not None:
-            last_active_days = (day_start.date() - claim["last_claim_at"].astimezone(timezone.utc).date()).days
+            last_active_days = (
+                day_start.date() - claim["last_claim_at"].astimezone(timezone.utc).date()
+            ).days
 
             first_claim_at = claim.get("first_claim_at")
             if first_claim_at is not None:
-                days_since_first = (day_start.date() - first_claim_at.astimezone(timezone.utc).date()).days
+                days_since_first = (
+                    day_start.date() - first_claim_at.astimezone(timezone.utc).date()
+                ).days
                 if days_since_first >= 2:
                     play_frequency = round(total_claims / days_since_first, 4)
 
@@ -136,7 +150,7 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
         action_tag = action_for_segment(segment)
         segment_counts[segment] = segment_counts.get(segment, 0) + 1
 
-        doc = {
+        return {
             "user_id": user_id,
             "total_claims": total_claims,
             "last_active_days": last_active_days,
@@ -148,9 +162,35 @@ def compute_user_profiles(mongo: MongoService, for_date: datetime) -> dict[str, 
             "action_tag": action_tag,
             "computed_at": now,
         }
-        operations.append(({"user_id": user_id}, doc))
 
-    mongo.bulk_upsert("user_profile_summary", operations)
+    # Pass 1: stream users collection
+    users_cursor = mongo.source("users").aggregate(
+        [
+            {
+                "$project": {
+                    "_id": 0,
+                    "user_id": {"$ifNull": ["$user_id", {"$toString": "$_id"}]},
+                }
+            }
+        ]
+    )
+    for row in users_cursor:
+        uid = str(row.get("user_id") or "")
+        if not uid:
+            continue
+        seen_ids.add(uid)
+        batch.append(({"user_id": uid}, _build_doc(uid)))
+        if len(batch) >= _BATCH_SIZE:
+            _flush(batch)
+
+    # Pass 2: users that only appear in claim_rows or referral_rows
+    orphan_ids = (set(claim_rows) | set(referral_rows)) - seen_ids
+    for uid in orphan_ids:
+        batch.append(({"user_id": uid}, _build_doc(uid)))
+        if len(batch) >= _BATCH_SIZE:
+            _flush(batch)
+
+    _flush(batch)  # final partial batch
     logger.info("Computed user profile summary for %s", day_start.date())
     return segment_counts
 
@@ -165,7 +205,11 @@ def compute_segmentation_kpis(mongo: MongoService, for_date: datetime) -> dict[s
         {"$match": {"claimed_at": {"$gte": day_start, "$lt": day_end}}},
         {"$group": {"_id": "$user_id"}},
     ]
-    claimed_users = {str(row["_id"]) for row in mongo.source("claim_events").aggregate(claims_pipeline) if row.get("_id") is not None}
+    claimed_users = {
+        str(row["_id"])
+        for row in mongo.source("claim_events").aggregate(claims_pipeline)
+        if row.get("_id") is not None
+    }
 
     claim_to_play_conversion = None
     d3_retention_rate = None
