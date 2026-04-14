@@ -47,7 +47,7 @@ def test_build_daily_report_no_posts() -> None:
         content={"top_post": None, "weakest_post": None},
     )
     # "none today" is the correct label when collection exists but returned no posts
-    assert "none today" in report
+    assert "No posts today" in report
     # "null" should no longer appear — it was replaced with explicit labels
     assert "null" not in report
 

@@ -9,6 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from app.clients.mongo_client import MongoService
 from app.clients.telegram_client import TelegramService
 from app.collectors.channel_collector import build_dispatcher
+from app.collectors.stats_refresh import refresh_post_stats
 from app.config.settings import settings
 from app.jobs.pipelines import run_daily_pipeline, run_weekly_pipeline
 
@@ -35,6 +36,15 @@ def start_scheduler(mongo: MongoService, telegram: TelegramService) -> AsyncIOSc
         _cron_trigger(settings.schedule_weekly_cron),
         args=[mongo, telegram],
         max_instances=1,
+    )
+    # Refresh post view/share counts every hour
+    scheduler.add_job(
+        refresh_post_stats,
+        "interval",
+        hours=1,
+        args=[mongo, telegram.bot],
+        max_instances=1,
+        id="stats_refresh",
     )
     scheduler.start()
     logger.info("Scheduler started")
@@ -70,7 +80,12 @@ async def run_forever() -> None:
         dp = build_dispatcher(mongo)
         await dp.start_polling(
             telegram.bot,
-            allowed_updates=["chat_member", "channel_post", "edited_channel_post"],
+            allowed_updates=[
+                "chat_member",
+                "channel_post",
+                "edited_channel_post",
+                "message_reaction_count",
+            ],
         )
     finally:
         if telegram is not None:

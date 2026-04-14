@@ -78,9 +78,39 @@ def build_daily_report(
 
     if content_missing:
         lines.append("- ⚠️ Content source collection unavailable — data not collected")
+    elif top_post:
+        tp = top_post
+        wp = weakest_post
+        lines.append(f"- Posts today: {content.get('post_count', 0)}")
+        lines.append(
+            f"- Top post: #{tp.get('post_id','?')} [{tp.get('content_type','?')}]"
+            f"  views={_fmt_val(tp.get('views'))} "
+            f"reactions={_fmt_val(tp.get('reactions'))} "
+            f"shares={_fmt_val(tp.get('shares'))} "
+            f"claims={_fmt_val(tp.get('claims_24h'))}"
+        )
+        if tp.get("reaction_breakdown"):
+            lines.append("  Reactions: " + "  ".join(
+                f"{e}{n}" for e, n in tp["reaction_breakdown"].items()
+            ))
+        if wp:
+            lines.append(
+                f"- Weakest post: #{wp.get('post_id','?')} [{wp.get('content_type','?')}]"
+                f"  views={_fmt_val(wp.get('views'))} claims={_fmt_val(wp.get('claims_24h'))}"
+            )
+        by_type = content.get("by_content_type", {})
+        if by_type:
+            lines.append("- By type:")
+            for ct, s in sorted(by_type.items()):
+                lines.append(
+                    f"  {ct:14s} posts={s['count']}"
+                    f"  views={s['total_views']}"
+                    f"  react={s['total_reactions']}"
+                    f"  shares={s['total_shares']}"
+                    f"  claims={s['total_claims_24h']}"
+                )
     else:
-        lines.append(f"- Top post: {top_post.get('post_id') if top_post else 'none today'}")
-        lines.append(f"- Weakest post: {weakest_post.get('post_id') if weakest_post else 'none today'}")
+        lines.append("- No posts today")
 
     lines.extend(["", "Alerts"])
     lines.extend([f"- {alert}" for alert in alerts] or ["- none"])
