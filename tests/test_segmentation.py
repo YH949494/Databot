@@ -63,7 +63,6 @@ class _FakeCollection:
             return {"_id": 1}
         return None
 
-
 class _FakeMongo:
     def __init__(self, collections):
         self._collections = collections
@@ -102,6 +101,34 @@ def test_win_rate_uses_result_count() -> None:
     segmentation.compute_user_profiles(mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc))
     doc = mongo.operations[0][1]
     assert doc["win_loss_pattern"] == "winning"
+
+
+def test_profiles_only_for_claim_users_and_counts_no_claim_history() -> None:
+    mongo = _FakeMongo(
+        {
+            "claim_events": _FakeCollection(
+                rows=[
+                    {
+                        "_id": "u1",
+                        "total_claims": 2,
+                        "last_claim_at": segmentation.datetime(2026, 1, 10, tzinfo=segmentation.timezone.utc),
+                        "first_claim_at": segmentation.datetime(2026, 1, 5, tzinfo=segmentation.timezone.utc),
+                        "win_count": 1,
+                        "result_count": 1,
+                    }
+                ],
+                exists_fields={"result"},
+            ),
+            "referral_events": _FakeCollection(rows=[{"_id": "u3", "referral_count": 2}]),
+            "users": _FakeCollection(rows=[{"user_id": "u1"}, {"user_id": "u2"}]),
+        }
+    )
+    counts = segmentation.compute_user_profiles(
+        mongo, segmentation.datetime(2026, 1, 11, tzinfo=segmentation.timezone.utc)
+    )
+    assert len(mongo.operations) == 1
+    assert mongo.operations[0][1]["user_id"] == "u1"
+    assert counts["no_claim_history"] == 1
 
 
 def test_cost_per_active_player_logic() -> None:
