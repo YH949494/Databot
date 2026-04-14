@@ -7,10 +7,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class SourceCollections(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    referral_events: str = Field("referrals", alias="REFERRAL_EVENTS_COLLECTION")
+    # Defaults aligned with .env.example canonical names.
+    # If your deployment still uses legacy names (referrals / voucher_claims)
+    # set REFERRAL_EVENTS_COLLECTION / CLAIM_EVENTS_COLLECTION in env explicitly.
+    referral_events: str = Field("referral_events", alias="REFERRAL_EVENTS_COLLECTION")
     referral_kpi: str = Field("referral_kpis", alias="REFERRAL_KPI_COLLECTION")
     users: str = Field("users", alias="USER_COLLECTION")
-    claim_events: str = Field("voucher_claims", alias="CLAIM_EVENTS_COLLECTION")
+    claim_events: str = Field("claim_events", alias="CLAIM_EVENTS_COLLECTION")
     post_logs: str = Field("post_logs", alias="POST_LOG_COLLECTION")
     channel_events: str = Field("channel_events", alias="CHANNEL_EVENTS_COLLECTION")
 
@@ -64,8 +67,10 @@ class Settings(BaseSettings):
     @property
     def admin_user_ids(self) -> list[int]:
         return [int(user_id.strip()) for user_id in self.tg_admin_user_ids.split(",") if user_id.strip()]
+
+    @property
     def source_db_name(self) -> str:
-        # Falls back to same DB if not set
+        """Resolved source DB name — falls back to derived DB if not explicitly set."""
         return self.mongodb_source_db_name or self.mongodb_db_name
 
 settings = Settings()

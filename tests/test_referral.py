@@ -66,4 +66,7 @@ def test_referral_daily_uses_referrals_created_at_when_status_fields_missing() -
         mongo, referral.datetime(2026, 1, 11, tzinfo=referral.timezone.utc)
     )
     assert result["joins"] == 3
-    assert result["qualified"] == 0
+    # qualified/breakdown are None in fallback path — not 0 — so callers can
+    # distinguish "source had no status field" from "zero qualified on a real day"
+    assert result["qualified"] is None
+    assert result["_source_fallback"] == "join_count_only"

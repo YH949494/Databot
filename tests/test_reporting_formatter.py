@@ -38,7 +38,10 @@ def test_build_daily_report_no_posts() -> None:
         channel={"new_joins": 0, "leaves": 0, "net_growth": 0, "churn_signals": []},
         content={"top_post": None, "weakest_post": None},
     )
-    assert "null" in report
+    # "none today" is the correct label when collection exists but returned no posts
+    assert "none today" in report
+    # "null" should no longer appear — it was replaced with explicit labels
+    assert "null" not in report
 
 
 def test_build_weekly_report_no_channel_data() -> None:

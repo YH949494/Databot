@@ -34,16 +34,17 @@ def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str,
             )
             summary = {
                 "date": day_start,
-                "joins": 0,
-                "qualified": 0,
-                "pending_hold": 0,
-                "failed_no_checkin": 0,
-                "failed_not_subscribed": 0,
-                "failed_left_before_hold": 0,
+                "joins": None,
+                "qualified": None,
+                "pending_hold": None,
+                "failed_no_checkin": None,
+                "failed_not_subscribed": None,
+                "failed_left_before_hold": None,
                 "avg_time_to_qualify_hours": None,
                 "top_inviters": [],
                 "low_quality_inviters": [],
                 "suspicious_patterns": [],
+                "_source_missing": True,
             }
             mongo.upsert_one("referral_daily", {"date": day_start}, summary)
             return summary
@@ -78,15 +79,16 @@ def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str,
         summary = {
             "date": day_start,
             "joins": total_joins,
-            "qualified": 0,
-            "pending_hold": 0,
-            "failed_no_checkin": 0,
-            "failed_not_subscribed": 0,
-            "failed_left_before_hold": 0,
+            "qualified": None,
+            "pending_hold": None,
+            "failed_no_checkin": None,
+            "failed_not_subscribed": None,
+            "failed_left_before_hold": None,
             "avg_time_to_qualify_hours": None,
             "top_inviters": inviter_stats_sorted[:5],
             "low_quality_inviters": [],
             "suspicious_patterns": [],
+            "_source_fallback": "join_count_only",
         }
         mongo.upsert_one("referral_daily", {"date": day_start}, summary)
         mongo.bulk_upsert(

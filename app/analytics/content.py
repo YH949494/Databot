@@ -14,14 +14,17 @@ logger = logging.getLogger(__name__)
 def compute_content_daily(mongo: MongoService, for_date: datetime) -> dict[str, Any]:
     day_start, day_end = day_bounds_utc(for_date.astimezone(timezone.utc))
     logger.info("Content source resolution: posts=%s", "post_logs")
-    if hasattr(mongo, "has_source_collection") and not mongo.has_source_collection("post_logs"):
-        logger.warning("Content source collection not available: %s", "post_logs")
-        return {
+    if not mongo.has_source_collection("post_logs"):
+        logger.warning("Content source collection not available: %s — writing source_missing sentinel", "post_logs")
+        sentinel = {
             "date": day_start,
-            "post_count": 0,
+            "post_count": None,
             "top_post": None,
             "weakest_post": None,
+            "_source_missing": True,
         }
+        mongo.bulk_upsert("content_daily", [({"date": day_start, "post_id": "__sentinel__"}, sentinel)])
+        return sentinel
 
     posts = list(
         mongo.source("post_logs").find(

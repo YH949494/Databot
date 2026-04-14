@@ -9,8 +9,15 @@ from app.utils.time import format_local
 
 def _fmt_pct(value: float | None) -> str:
     if value is None:
-        return "null"
+        return "⚠️ unavailable"
     return f"{round(value * 100, 2)}%"
+
+
+def _fmt_val(value: Any, unit: str = "") -> str:
+    """Render a metric value: None → ⚠️ unavailable, otherwise the value."""
+    if value is None:
+        return "⚠️ unavailable"
+    return f"{value}{unit}"
 
 
 def build_daily_report(
@@ -22,16 +29,21 @@ def build_daily_report(
     segmentation: dict[str, Any] | None = None,
     segmentation_kpis: dict[str, Any] | None = None,
 ) -> str:
-    conversion = safe_divide(referral.get("qualified", 0), referral.get("joins", 0))
+    ref_joins = referral.get("joins")
+    ref_qualified = referral.get("qualified")
+    conversion = safe_divide(ref_qualified or 0, ref_joins or 0) if (ref_joins and ref_qualified is not None) else None
+
     top_post = content.get("top_post")
     weakest_post = content.get("weakest_post")
+    channel_missing = channel.get("_source_missing", False)
+    content_missing = content.get("_source_missing", False)
 
     alerts: list[str] = []
     if referral.get("suspicious_patterns"):
         alerts.append("Referral anomaly: " + ", ".join(referral["suspicious_patterns"]))
     if channel.get("churn_signals"):
         alerts.append("Channel churn signal: " + ", ".join(channel["churn_signals"]))
-    if referral.get("joins", 0) > 0 and conversion is not None and conversion < 0.2:
+    if ref_joins and ref_joins > 0 and conversion is not None and conversion < 0.2:
         alerts.append("Conversion is below 20%")
 
     actions = [
@@ -45,39 +57,50 @@ def build_daily_report(
         f"Date: {format_local(report_date, tz_name)}",
         "",
         "Referral",
-        f"- Joins: {referral.get('joins')}",
-        f"- Qualified: {referral.get('qualified')}",
-        f"- Pending hold: {referral.get('pending_hold')}",
+        f"- Joins: {_fmt_val(ref_joins)}",
+        f"- Qualified: {_fmt_val(ref_qualified)}",
+        f"- Pending hold: {_fmt_val(referral.get('pending_hold'))}",
         f"- Join→Qualified conversion: {_fmt_pct(conversion)}",
         "",
         "Channel",
-        f"- Joins/Leaves/Net: {channel.get('new_joins')} / {channel.get('leaves')} / {channel.get('net_growth')}",
-        "",
-        "Content",
-        f"- Top post: {top_post.get('post_id') if top_post else 'null'}",
-        f"- Weakest post: {weakest_post.get('post_id') if weakest_post else 'null'}",
-        "",
-        "Alerts",
     ]
 
+    if channel_missing:
+        lines.append("- ⚠️ Channel source collection unavailable — data not collected")
+    else:
+        lines.append(f"- Joins/Leaves/Net: {_fmt_val(channel.get('new_joins'))} / {_fmt_val(channel.get('leaves'))} / {_fmt_val(channel.get('net_growth'))}")
+
+    lines.append("")
+    lines.append("Content")
+
+    if content_missing:
+        lines.append("- ⚠️ Content source collection unavailable — data not collected")
+    else:
+        lines.append(f"- Top post: {top_post.get('post_id') if top_post else 'none today'}")
+        lines.append(f"- Weakest post: {weakest_post.get('post_id') if weakest_post else 'none today'}")
+
+    lines.extend(["", "Alerts"])
     lines.extend([f"- {alert}" for alert in alerts] or ["- none"])
+
+    seg = segmentation or {}
+    kpis = segmentation_kpis or {}
     lines.extend(
         [
             "",
             "Segmentation",
-            f"- New: {(segmentation or {}).get('new', 0)}  → onboarding_push",
-            f"- Active: {(segmentation or {}).get('active', 0)}  → leaderboard_competition",
-            f"- At risk: {(segmentation or {}).get('at_risk', 0)}  → comeback_voucher",
-            f"- Dead: {(segmentation or {}).get('dead', 0)}  → aggressive_reactivation",
-            f"- High value: {(segmentation or {}).get('high_value', 0)}  → vip_treatment",
-            f"- Unknown: {(segmentation or {}).get('unknown', 0)}  → no_action",
-            f"- No claim history: {(segmentation or {}).get('no_claim_history', 0)}  → excluded_from_main_segments",
+            f"- New: {seg.get('new', 0)}  → onboarding_push",
+            f"- Active: {seg.get('active', 0)}  → leaderboard_competition",
+            f"- At risk: {seg.get('at_risk', 0)}  → comeback_voucher",
+            f"- Dead: {seg.get('dead', 0)}  → aggressive_reactivation",
+            f"- High value: {seg.get('high_value', 0)}  → vip_treatment",
+            f"- Unknown: {seg.get('unknown', 0)}  → no_action",
+            f"- No claim history: {seg.get('no_claim_history', 0)}  → excluded_from_main_segments",
             "",
             "KPIs",
-            f"- Claim→Play conversion: {_fmt_pct((segmentation_kpis or {}).get('claim_to_play_conversion'))}",
-            f"- D3 retention: {_fmt_pct((segmentation_kpis or {}).get('d3_retention_rate'))}",
-            f"- D7 retention: {_fmt_pct((segmentation_kpis or {}).get('d7_retention_rate'))}",
-            f"- Cost per active player: {(segmentation_kpis or {}).get('cost_per_active_player', 'null')}",
+            f"- Claim→Play conversion: {_fmt_pct(kpis.get('claim_to_play_conversion'))}",
+            f"- D3 retention: {_fmt_pct(kpis.get('d3_retention_rate'))}",
+            f"- D7 retention: {_fmt_pct(kpis.get('d7_retention_rate'))}",
+            f"- Cost per active player: {_fmt_val(kpis.get('cost_per_active_player'))}",
         ]
     )
     lines.extend(["", "Actions"])
