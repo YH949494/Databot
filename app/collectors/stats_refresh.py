@@ -1,71 +1,145 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
-from app.clients.mongo_client import MongoService
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
-_REFRESH_WINDOW_DAYS = 7
 
-def _utcnow(): return datetime.now(timezone.utc)
+
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
 def _channel_id():
-    try: return int(settings.tg_channel_id)
-    except: return settings.tg_channel_id
+    try:
+        return int(settings.tg_channel_id)
+    except Exception:
+        return settings.tg_channel_id
+
+
+def _week_window_kl(reference_utc: datetime | None = None):
+    now_utc = reference_utc or _utcnow()
+    kl = ZoneInfo("Asia/Kuala_Lumpur")
+    now_local = now_utc.astimezone(kl)
+    week_start_local = datetime.combine(
+        (now_local - timedelta(days=now_local.weekday())).date(),
+        time(0, 0, 0),
+        tzinfo=kl,
+    )
+    week_end_local = datetime.combine(
+        week_start_local.date() + timedelta(days=6),
+        time(23, 59, 59, 999999),
+        tzinfo=kl,
+    )
+    return week_start_local, week_end_local, week_start_local.astimezone(timezone.utc), week_end_local.astimezone(timezone.utc)
+
 
 async def fetch_channel_stats(bot, mongo):
+    channel_id = _channel_id()
     try:
-        stats = await bot.get_chat_statistics(chat_id=_channel_id())
+        chat = await bot.get_chat(chat_id=channel_id)
+        member_count = await bot.get_chat_member_count(chat_id=channel_id)
     except TelegramAPIError as e:
-        logger.warning("getChatStatistics failed: %s", e); return None
+        logger.warning("channel stats refresh failed chat_id=%s error=%s", channel_id, e)
+        return None
+
+    admin_count = None
+    try:
+        admins = await bot.get_chat_administrators(chat_id=channel_id)
+        admin_count = len(admins or [])
+    except TelegramAPIError as e:
+        logger.debug("get_chat_administrators skipped chat_id=%s error=%s", channel_id, e)
+
     doc = {
+        "_type": "channel_stats_snapshot",
         "recorded_at": _utcnow(),
-        "period_start": getattr(stats, "period", {}).get("min_date") if hasattr(stats, "period") and stats.period else None,
-        "period_end": getattr(stats, "period", {}).get("max_date") if hasattr(stats, "period") and stats.period else None,
-        "member_count": _cval(getattr(stats, "member_count", None)),
-        "member_count_delta": _cdelta(getattr(stats, "member_count", None)),
-        "mean_view_count": _cval(getattr(stats, "mean_view_count", None)),
-        "mean_view_count_delta": _cdelta(getattr(stats, "mean_view_count", None)),
-        "mean_share_count": _cval(getattr(stats, "mean_share_count", None)),
-        "mean_share_count_delta": _cdelta(getattr(stats, "mean_share_count", None)),
-        "mean_reaction_count": _cval(getattr(stats, "mean_reaction_count", None)),
-        "mean_reaction_count_delta": _cdelta(getattr(stats, "mean_reaction_count", None)),
-        "enabled_notifications_percent": _cval(getattr(stats, "enabled_notifications_percentage", None)),
+        "chat_id": channel_id,
+        "chat_type": getattr(chat, "type", None),
+        "title": getattr(chat, "title", None),
+        "username": getattr(chat, "username", None),
+        "member_count": member_count,
+        "administrator_count": admin_count,
     }
     mongo.source_db[settings.source_collections.channel_stats_overview].update_one(
-        {"_type": "channel_stats_snapshot"}, {"$set": {**doc, "_type": "channel_stats_snapshot"}}, upsert=True
+        {"_type": "channel_stats_snapshot", "chat_id": channel_id},
+        {"$set": doc},
+        upsert=True,
     )
-    logger.info("fetch_channel_stats: members=%s", doc["member_count"])
+    logger.info(
+        "fetch_channel_stats: chat_id=%s members=%s admins=%s",
+        channel_id,
+        member_count,
+        admin_count,
+    )
     return doc
+
 
 async def fetch_message_stats(bot, mongo):
     channel_id = _channel_id()
-    cutoff = _utcnow() - timedelta(days=_REFRESH_WINDOW_DAYS)
+    week_start_local, week_end_local, week_start_utc, week_end_utc = _week_window_kl()
     post_col = mongo.source_db[settings.source_collections.post_logs]
-    posts = list(post_col.find({"chat_id": channel_id, "post_time": {"$gte": cutoff}}, {"post_id": 1}))
-    if not posts: return
-    logger.info("fetch_message_stats: refreshing %d posts", len(posts))
-    refreshed = 0
-    for post in posts:
-        pid = post["post_id"]
-        try: ms = await bot.get_message_statistics(chat_id=channel_id, message_id=pid)
-        except TelegramAPIError as e: logger.debug("skip %s: %s", pid, e); continue
-        v = getattr(ms, "views", 0) or 0
-        ps = getattr(ms, "public_shares", 0) or 0
-        prs = getattr(ms, "private_shares", 0) or 0
-        rt, rb = _extract_reactions(ms)
-        post_col.update_one(
-            {"post_id": pid, "chat_id": channel_id},
-            {"$set": {"views": v, "public_shares": ps, "private_shares": prs,
-                      "shares": ps + prs, "reactions": rt, "reaction_breakdown": rb,
-                      "stats_refreshed_at": _utcnow()}}
+    posts = list(
+        post_col.find(
+            {
+                "chat_id": channel_id,
+                "post_time": {"$gte": week_start_utc, "$lte": week_end_utc},
+            },
+            {"post_id": 1, "views": 1, "shares": 1, "reactions": 1, "post_time": 1},
         )
-        refreshed += 1
-    logger.info("fetch_message_stats: refreshed %d/%d", refreshed, len(posts))
+    )
+    if not posts:
+        logger.info(
+            "fetch_message_stats: no posts for week chat_id=%s week_start=%s week_end=%s",
+            channel_id,
+            week_start_local.isoformat(),
+            week_end_local.isoformat(),
+        )
+        return None
+
+    totals = {
+        "post_count": len(posts),
+        "views": sum(int(p.get("views", 0) or 0) for p in posts),
+        "shares": sum(int(p.get("shares", 0) or 0) for p in posts),
+        "reactions": sum(int(p.get("reactions", 0) or 0) for p in posts),
+    }
+    doc = {
+        "_type": "weekly_post_stats",
+        "chat_id": channel_id,
+        "timezone": "Asia/Kuala_Lumpur",
+        "week_start_local": week_start_local,
+        "week_end_local": week_end_local,
+        "week_start_utc": week_start_utc,
+        "week_end_utc": week_end_utc,
+        "recorded_at": _utcnow(),
+        **totals,
+    }
+    mongo.source_db[settings.source_collections.channel_stats_overview].update_one(
+        {
+            "_type": "weekly_post_stats",
+            "chat_id": channel_id,
+            "week_start_local": week_start_local,
+            "week_end_local": week_end_local,
+        },
+        {"$set": doc},
+        upsert=True,
+    )
+    logger.info(
+        "fetch_message_stats: aggregated chat_id=%s week=%s..%s posts=%s views=%s shares=%s reactions=%s",
+        channel_id,
+        week_start_local.isoformat(),
+        week_end_local.isoformat(),
+        totals["post_count"],
+        totals["views"],
+        totals["shares"],
+        totals["reactions"],
+    )
+    return doc
+
 
 async def fetch_subscriber_count(bot, mongo):
     try:
@@ -73,37 +147,14 @@ async def fetch_subscriber_count(bot, mongo):
         mongo.source_db[settings.source_collections.channel_events].update_one(
             {"_type": "subscriber_snapshot"},
             {"$set": {"_type": "subscriber_snapshot", "count": count, "recorded_at": _utcnow()}},
-            upsert=True
+            upsert=True,
         )
         return count
-    except TelegramAPIError as e: logger.warning("subscriber_count failed: %s", e)
+    except TelegramAPIError as e:
+        logger.warning("subscriber_count failed: %s", e)
+
 
 async def refresh_post_stats(mongo, bot):
     await fetch_subscriber_count(bot, mongo)
     await fetch_channel_stats(bot, mongo)
     await fetch_message_stats(bot, mongo)
-
-def _cval(c):
-    if c is None: return None
-    if isinstance(c, (int, float)): return float(c)
-    v = getattr(c, "value", None); return float(v) if v is not None else None
-
-def _cdelta(c):
-    if c is None: return None
-    p = getattr(c, "previous_value", None)
-    if p is not None:
-        cur = getattr(c, "value", None)
-        if cur is not None: return float(cur) - float(p)
-    return None
-
-def _extract_reactions(ms):
-    o = getattr(ms, "reactions", None)
-    if o is None: return 0, {}
-    if isinstance(o, (int, float)): return int(o), {}
-    if isinstance(o, list):
-        b, t = {}, 0
-        for r in o:
-            e = getattr(getattr(r, "type", None), "emoji", None) or str(r)
-            b[e] = int(getattr(r, "total_count", 0) or 0); t += b[e]
-        return t, b
-    return 0, {}
