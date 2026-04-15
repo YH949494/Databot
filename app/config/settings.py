@@ -7,10 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class SourceCollections(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
     referral_events: str = Field("referrals", alias="REFERRAL_EVENTS_COLLECTION")
-    referral_kpi: str = Field("referral_kpis", alias="REFERRAL_KPI_COLLECT_ION")
+    referral_kpi: str = Field("referral_kpis", alias="REFERRAL_KPI_COLLECTION")
     users: str = Field("users", alias="USER_COLLECTION")
     claim_events: str = Field("vouchers", alias="CLAIM_EVENTS_COLLECTION")
-    post_logs: str = Field("post_logs", alias=!POST_LOG_COLLECTION")
+    post_logs: str = Field("post_logs", alias="POST_LOG_COLLECTION")
     channel_events: str = Field("channel_events", alias="CHANNEL_EVENTS_COLLECTION")
     channel_stats_overview: str = Field("channel_stats_overview", alias="CHANNEL_STATS_OVERVIEW_COLLECTION")
 
@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     mongodb_uri: str = Field(..., alias="MONGODB_URI")
     mongodb_db_name: str = Field(..., alias="MONGODB_DB_NAME")
     mongodb_source_db_name: str = Field("", alias="MONGODB_SOURCE_DB_NAME")
-    tg_growth_bot_token: str = Field(..., alias=!TG_GROWTH_BOT_TOKEN")
-    tg_report_chat_id: int = Field(..., alias=!TG_REPORT_CHAT_ID")
+    tg_growth_bot_token: str = Field(..., alias="TG_GROWTH_BOT_TOKEN")
+    tg_report_chat_id: int = Field(..., alias="TG_REPORT_CHAT_ID")
     tg_admin_user_ids: str = Field(..., alias="TG_ADMIN_USER_IDS")
     tg_channel_id: str = Field(..., alias="TG_CHANNEL_ID")
     scheduler_enabled: bool = Field(True, alias="SCHEDULER_ENABLED")
