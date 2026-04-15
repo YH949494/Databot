@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 import logging
 from datetime import timedelta
-
 from app.analytics.channel import compute_channel_daily
 from app.analytics.content import compute_content_daily
 from app.analytics.referral import compute_referral_daily, compute_referral_weekly
@@ -15,23 +13,35 @@ from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
+def _load_channel_stats(mongo):
+    try:
+        return mongo.source_db[settings.source_collections.channel_stats_overview].find_one(
+            {"_type": "channel_stats_snapshot"}, {"_id": 0}
+        )
+    except Exception:
+        logger.warning("Could not load channel_stats_overview", stack_info=True)
+        return None
 
-async def run_daily_pipeline(mongo: MongoService, telegram: TelegramService) -> None:
-    target_date = utc_now() - timedelta(days=1)
-    referral = compute_referral_daily(mongo, target_date)
-    channel = compute_channel_daily(mongo, target_date)
-    content = compute_content_daily(mongo, target_date)
-    segmentation = compute_user_profiles(mongo, target_date)
-    segmentation_kpis = compute_segmentation_kpis(mongo, target_date)
-
-    report = build_daily_report(target_date, settings.tz, referral, channel, content, segmentation, segmentation_kpis)
+async def run_daily_pipeline(mongo, telegram):
+    d = utc_now() - timedelta(days=1)
+    report = build_daily_report(
+        d, settings.tz,
+        compute_referral_daily(mongo, d),
+        compute_channel_daily(mongo, d),
+        compute_content_daily(mongo, d),
+        compute_user_profiles(mongo, d),
+        compute_segmentation_kpis(mongo, d),
+        channel_stats=_load_channel_stats(mongo),
+    )
     await telegram.send_report(report)
     logger.info("Daily pipeline completed")
 
-
-async def run_weekly_pipeline(mongo: MongoService, telegram: TelegramService) -> None:
-    target_date = utc_now() - timedelta(days=1)
-    weekly_referral = compute_referral_weekly(mongo, target_date)
-    report = build_weekly_report(target_date, settings.tz, weekly_referral)
+async def run_weekly_pipeline(mongo, telegram):
+    d = utc_now() - timedelta(days=1)
+    report = build_weekly_report(
+        d, settings.tz,
+        compute_referral_weekly(mongo, d),
+        channel_stats=_load_channel_stats(mongo),
+    )
     await telegram.send_report(report)
     logger.info("Weekly pipeline completed")
