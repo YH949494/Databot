@@ -37,14 +37,13 @@ def start_scheduler(mongo: MongoService, telegram: TelegramService) -> AsyncIOSc
         args=[mongo, telegram],
         max_instances=1,
     )
-    # Refresh post view/share counts every hour
+    # Refresh Telegram channel + weekly post stats every Sunday 23:55 (Asia/Kuala_Lumpur).
     scheduler.add_job(
         refresh_post_stats,
-        "interval",
-        hours=1,
+        CronTrigger(day_of_week="sun", hour=23, minute=55, timezone=settings.tz),
         args=[mongo, telegram.bot],
         max_instances=1,
-        id="stats_refresh",
+        id="stats_refresh_weekly",
     )
     scheduler.start()
     logger.info("Scheduler started")
