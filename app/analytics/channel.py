@@ -30,7 +30,6 @@ def compute_channel_daily(mongo: MongoService, for_date: datetime) -> dict[str, 
         mongo.upsert_one("channel_daily", {"date": day_start}, summary)
         return summary
 
-    # Server-side aggregation — avoids pulling all events into Python memory.
     pipeline: list[dict] = [
         {"$match": {"event_time": {"$gte": day_start, "$lt": day_end}}},
         {
@@ -68,7 +67,7 @@ def compute_channel_daily(mongo: MongoService, for_date: datetime) -> dict[str, 
         )
     )
     baseline_leave_avg = (
-        sum(doc.get("leaves", 0) for doc in prior_days) / len(prior_days)
+        sum(int(doc.get("leaves") or 0) for doc in prior_days) / len(prior_days)
         if prior_days
         else None
     )
