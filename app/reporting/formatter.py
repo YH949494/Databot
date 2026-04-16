@@ -29,8 +29,8 @@ def build_channel_stats_section(stats):
 
 def build_message_stats_section(post):
     v = post.get("views", 0); re = post.get("reactions", 0)
-    ps = post.get("public_shares", 0); pr = post.get("private_shares", 0)
-    lines = [f"  views={_fmt_val(v)}  reactions={_fmt_val(re)}  public_shares={_fmt_val(ps)}  private_shares={_fmt_val(pr)}"]
+    sh = post.get("shares", 0)
+    lines = [f"  views={_fmt_val(v)}  reactions={_fmt_val(re)}  shares={_fmt_val(sh)}"]
     bd = post.get("reaction_breakdown", {})
     if bd: lines.append("  Reactions: " + "  ".join(f"{e}{n}" for e,n in bd.items()))
     return lines
