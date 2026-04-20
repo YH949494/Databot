@@ -35,6 +35,24 @@ def build_message_stats_section(post):
     if bd: lines.append("  Reactions: " + "  ".join(f"{e}{n}" for e,n in bd.items()))
     return lines
 
+def _build_summary(referral, channel, content, alerts):
+    tp = content.get("top_post")
+    top_react = tp.get("reactions", 0) if tp else 0
+    top_type  = tp.get("content_type", "?") if tp else "—"
+    net       = channel.get("net_growth")
+    joins     = channel.get("new_joins", 0)
+    leaves    = channel.get("leaves", 0)
+    net_str   = f"{'+' if (net or 0) >= 0 else ''}{net}" if net is not None else "?"
+    alert_str = f"⚠️ {len(alerts)} alert{'s' if len(alerts)!=1 else ''}" if alerts else "✅ No alerts"
+    return [
+        "┌─ Today at a Glance ─────────────────",
+        f"│ 🎫 Claims: {_fmt_val(referral.get('joins'))}   📊 Total referrals: {_fmt_val(referral.get('total_referrals_snapshot'))}",
+        f"│ 👥 Channel net: {net_str}  ({joins} in / {leaves} out)",
+        f"│ 📝 Posts: {content.get('post_count', 0)}   🔥 Top post: {top_react} reactions [{top_type}]",
+        f"│ {alert_str}",
+        "└─────────────────────────────────────",
+    ]
+
 def build_daily_report(report_date, tz_name, referral, channel, content, segmentation=None, segmentation_kpis=None, channel_stats=None):
     tp = content.get("top_post"); wp = content.get("weakest_post")
     alerts = []
@@ -43,10 +61,13 @@ def build_daily_report(report_date, tz_name, referral, channel, content, segment
     ti = ", ".join(f"{i.get('username') or i.get('inviter_user_id','?')} ({i.get('referral_count','?')})" for i in referral.get("top_inviters",[])[:3]) or "none"
     lines = [
         "📊 Daily Growth Intelligence Report", f"Date: {format_local(report_date,tz_name)}", "",
-        "Referral", f"- Voucher claims today: {_fmt_val(referral.get('joins'))}",
+    ]
+    lines.extend(_build_summary(referral, channel, content, alerts))
+    lines.extend([
+        "", "Referral", f"- Voucher claims today: {_fmt_val(referral.get('joins'))}",
         f"- Total referrals (all-time): {_fmt_val(referral.get('total_referrals_snapshot'))}",
         f"- Top inviters: {ti}", "", "📡 Channel Stats (Telegram API)",
-    ]
+    ])
     lines.extend(build_channel_stats_section(channel_stats))
     lines.append(""); lines.append("Channel Events (MongoDB)")
     if channel.get("_source_missing"): lines.append("- ⚠️ Channel source collection unavailable")
@@ -66,19 +87,20 @@ def build_daily_report(report_date, tz_name, referral, channel, content, segment
             for ct,s in sorted(byt.items()):
                 lines.append(f"  {ct:14s} posts={s['count']}  views={s['total_views']}  react={s['total_reactions']}  shares={s['total_shares']}  claims={s['total_claims_24h']}")
     else: lines.append("- No posts today")
-    lines.extend(["", "Alerts"]); lines.extend([f"- {a}" for a in alerts] or ["- none"])
-    seg = segmentation or {}; kpi = segmentation_kpis or {}
+    lines.append("")
+    if alerts:
+        lines.append("⚠️ Alerts ─────────────────────────────")
+        lines.extend([f"  ‼️ {a}" for a in alerts])
+        lines.append("────────────────────────────────────────")
+    else:
+        lines.extend(["⚠️ Alerts", "- none"])
+    seg = segmentation or {}
     lines.extend(["","Segmentation",
         f"- New: {seg.get('new',0)}", f"- Active: {seg.get('active',0)}",
         f"- At risk: {seg.get('at_risk',0)}", f"- Dead: {seg.get('dead',0)}",
         f"- High value: {seg.get('high_value',0)}", f"- Unknown: {seg.get('unknown',0)}",
         f"- No claim history: {seg.get('no_claim_history',0)}",
-        "","KPIs",
-        f"- Claim→Play conversion: {_fmt_pct(kpi.get('claim_to_play_conversion'))}",
-        f"- D3 retention: {_fmt_pct(kpi.get('d3_retention_rate'))}",
-        f"- D7 retention: {_fmt_pct(kpi.get('d7_retention_rate'))}",
-        f"- Cost per active player: {_fmt_val(kpi.get('cost_per_active_player'))}",
-        "","Actions",
+        "","✅ Daily Actions",
         "- Review top 5 low-quality inviters and suspend suspicious acquisition sources.",
         "- Prioritize content angles from top post during high-response posting window.",
         "- Audit no-checkin and left-before-hold failures for onboarding friction."
