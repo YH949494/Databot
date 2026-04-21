@@ -58,7 +58,7 @@ def build_daily_report(report_date, tz_name, referral, channel, content, segment
     alerts = []
     if referral.get("suspicious_patterns"): alerts.append("Referral anomaly: " + ", ".join(referral["suspicious_patterns"]))
     if channel.get("churn_signals"): alerts.append("Channel churn signal: " + ", ".join(channel["churn_signals"]))
-    ti = ", ".join(f"{i.get('username') or i.get('inviter_user_id','?')} ({i.get('referral_count','?')})" for i in referral.get("top_inviters",[])[:3]) or "none"
+    ti = ", ".join(f"{i.get('username') or i.get('inviter_user_id','?')} ({i.get('referral_count','?')})" for i in referral.get("top_inviters_this_week",[])[:3]) or "none"
     lines = [
         "📊 Daily Growth Intelligence Report", f"Date: {format_local(report_date,tz_name)}", "",
     ]
@@ -66,7 +66,7 @@ def build_daily_report(report_date, tz_name, referral, channel, content, segment
     lines.extend([
         "", "Referral", f"- Voucher claims today: {_fmt_val(referral.get('joins'))}",
         f"- Total referrals (all-time): {_fmt_val(referral.get('total_referrals_snapshot'))}",
-        f"- Top inviters: {ti}", "", "📡 Channel Stats (Telegram API)",
+        f"- Top inviters this week: {ti}", "", "📡 Channel Stats (Telegram API)",
     ])
     lines.extend(build_channel_stats_section(channel_stats))
     lines.append(""); lines.append("Channel Events (MongoDB)")

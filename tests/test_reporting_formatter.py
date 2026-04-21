@@ -9,7 +9,8 @@ def test_build_daily_report_contains_required_sections() -> None:
         report_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
         tz_name="Asia/Kuala_Lumpur",
         referral={"joins": 10, "total_referrals_snapshot": 500, "suspicious_patterns": [],
-                  "top_inviters": [{"inviter_user_id": "u1", "username": "Alice", "referral_count": 12}]},
+                  "top_inviters": [{"inviter_user_id": "u1", "username": "Alice", "referral_count": 12}],
+                  "top_inviters_this_week": [{"inviter_user_id": "u2", "username": "Bob", "referral_count": 3}]},
         channel={"new_joins": 5, "leaves": 1, "net_growth": 4, "churn_signals": []},
         content={"top_post": {"post_id": 111}, "weakest_post": {"post_id": 222}},
     )
@@ -17,7 +18,9 @@ def test_build_daily_report_contains_required_sections() -> None:
     assert "Daily Growth Intelligence Report" in report
     assert "Voucher claims today" in report        # new referral label
     assert "Total referrals (all-time)" in report  # snapshot label
-    assert "Top inviters" in report
+    assert "Top inviters this week" in report
+    assert "Bob (3)" in report
+    assert "Alice (12)" not in report
     assert "Alerts" in report
     assert "Actions" in report
 
@@ -27,7 +30,7 @@ def test_build_daily_report_low_conversion_alert() -> None:
     report = build_daily_report(
         report_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
         tz_name="Asia/Kuala_Lumpur",
-        referral={"joins": 50, "suspicious_patterns": ["claim_spike_vs_recent_baseline"], "top_inviters": []},
+        referral={"joins": 50, "suspicious_patterns": ["claim_spike_vs_recent_baseline"], "top_inviters_this_week": []},
         channel={"new_joins": 5, "leaves": 1, "net_growth": 4, "churn_signals": []},
         content={"top_post": None, "weakest_post": None},
     )
@@ -35,6 +38,7 @@ def test_build_daily_report_low_conversion_alert() -> None:
     assert "Conversion is below 20%" not in report
     # Spike alert from suspicious_patterns still surfaces
     assert "claim_spike_vs_recent_baseline" in report
+    assert "- Top inviters this week: none" in report
 
 
 def test_build_daily_report_no_posts() -> None:
@@ -85,4 +89,3 @@ def test_build_weekly_report_with_channel_data() -> None:
         weekly_channel={"net_growth": 250},
     )
     assert "250" in report
-

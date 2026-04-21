@@ -7,7 +7,8 @@ from typing import Any
 
 from app.analytics.rules import abnormal_spike, quality_flag, safe_divide, suspicious_inviter
 from app.clients.mongo_client import MongoService
-from app.utils.time import day_bounds_utc, week_bounds_utc
+from app.config.settings import settings
+from app.utils.time import day_bounds_utc, week_bounds_utc, week_bounds_utc_for_tz
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,9 @@ def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str,
       - vouchers               — daily claim activity (claimedAt, usernameLower/claimedBy, status)
 
     'joins' = new voucher claims today (status=claimed, claimedAt within day).
-    'top_inviters' = users with highest referral_count, ranked descending.
+    'top_inviters_all_time' = users with highest referral_count, ranked descending.
+    'top_inviters_this_week' = inviters ranked by current natural KL week referrals.
+    'top_inviters' is retained as a backward-compatible alias to all-time ranking.
     Qualified/pending/failure breakdown not available from this schema — reported as None.
     """
     day_start, day_end = day_bounds_utc(for_date.astimezone(timezone.utc))
@@ -52,20 +55,60 @@ def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str,
     result = next(mongo.source("claim_events").aggregate(claims_pipeline), None)
     daily_claims = int(result["total"]) if result else 0
 
-    # --- Top inviters from users.referral_count ---
-    top_inviters_cursor = mongo.source("users").find(
+    # --- Top inviters (all-time) from users.referral_count ---
+    top_inviters_all_time_cursor = mongo.source("users").find(
         {"referral_count": {"$exists": True, "$gt": 0}},
         {"_id": 1, "user_id": 1, "username": 1, "referral_count": 1},
     ).sort("referral_count", -1).limit(10)
 
-    top_inviters = []
-    for row in top_inviters_cursor:
+    top_inviters_all_time = []
+    for row in top_inviters_all_time_cursor:
         uid = str(row.get("user_id") or row.get("_id") or "unknown")
-        top_inviters.append({
+        top_inviters_all_time.append({
             "inviter_user_id": uid,
             "username": row.get("username"),
             "referral_count": int(row.get("referral_count", 0)),
         })
+
+    # --- Weekly top inviters from current KL week referral events ---
+    week_start, week_end = week_bounds_utc_for_tz(for_date.astimezone(timezone.utc), settings.tz)
+    weekly_inviter_rows = list(
+        mongo.source("referral_events").aggregate(
+            [
+                {
+                    "$match": {
+                        "event_time": {"$gte": week_start, "$lt": week_end},
+                        "inviter_user_id": {"$exists": True, "$ne": None},
+                    }
+                },
+                {"$group": {"_id": "$inviter_user_id", "referral_count": {"$sum": 1}}},
+                {"$sort": {"referral_count": -1}},
+                {"$limit": 10},
+            ]
+        )
+    )
+    inviter_ids = [str(r.get("_id")) for r in weekly_inviter_rows if r.get("_id") is not None]
+    username_by_user_id: dict[str, str | None] = {}
+    if inviter_ids:
+        user_rows = mongo.source("users").find(
+            {"user_id": {"$in": inviter_ids}},
+            {"_id": 0, "user_id": 1, "username": 1},
+        )
+        username_by_user_id = {str(u.get("user_id")): u.get("username") for u in user_rows}
+
+    top_inviters_this_week = []
+    for row in weekly_inviter_rows:
+        inviter_raw = row.get("_id")
+        if inviter_raw is None:
+            continue
+        inviter_id = str(inviter_raw)
+        top_inviters_this_week.append(
+            {
+                "inviter_user_id": inviter_id,
+                "username": username_by_user_id.get(inviter_id),
+                "referral_count": int(row.get("referral_count", 0)),
+            }
+        )
 
     # --- Total referral_count across all users (snapshot) ---
     total_referral_agg = list(mongo.source("users").aggregate([
@@ -99,7 +142,9 @@ def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str,
         "failed_not_subscribed": None,
         "failed_left_before_hold": None,
         "avg_time_to_qualify_hours": None,
-        "top_inviters": top_inviters[:5],
+        "top_inviters": top_inviters_all_time[:5],
+        "top_inviters_all_time": top_inviters_all_time[:5],
+        "top_inviters_this_week": top_inviters_this_week[:5],
         "low_quality_inviters": [],
         "suspicious_patterns": suspicious_patterns,
     }
@@ -107,7 +152,7 @@ def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str,
     mongo.upsert_one("referral_daily", {"date": day_start}, summary)
 
     # Write per-inviter rows to inviter_daily for weekly rollup
-    if top_inviters:
+    if top_inviters_all_time:
         mongo.bulk_upsert(
             "inviter_daily",
             [
@@ -115,7 +160,7 @@ def compute_referral_daily(mongo: MongoService, for_date: datetime) -> dict[str,
                     {"date": day_start, "inviter_user_id": inv["inviter_user_id"]},
                     {**inv, "date": day_start, "joins": inv["referral_count"]},
                 )
-                for inv in top_inviters
+                for inv in top_inviters_all_time
             ],
         )
 

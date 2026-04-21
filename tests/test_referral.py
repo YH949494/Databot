@@ -16,8 +16,10 @@ class _FakeCollection:
         self._rows = rows or []
         self._aggregate_rows = aggregate_rows if aggregate_rows is not None else self._rows
         self._exists_fields = exists_fields or set()
+        self.aggregate_calls = []
 
-    def aggregate(self, _pipeline):
+    def aggregate(self, pipeline):
+        self.aggregate_calls.append(pipeline)
         return iter(self._aggregate_rows)
 
     def find(self, *_args, **_kwargs):
@@ -72,19 +74,28 @@ class _FakeMongo:
 
 
 def test_referral_daily_uses_voucher_claims_and_user_referral_count() -> None:
-    """compute_referral_daily sources joins from vouchers (claim_events) and
-    top_inviters from users.referral_count — not from the referrals collection."""
+    """compute_referral_daily keeps all-time and weekly top inviter metrics separate."""
+    users = _FakeCollection(
+        rows=[
+            {"user_id": "u1", "username": "Alice", "referral_count": 999},
+            {"user_id": "u2", "username": "Bob", "referral_count": 5},
+        ],
+        aggregate_rows=[{"_id": None, "total": 1004}],
+    )
+    referrals = _FakeCollection(
+        aggregate_rows=[
+            {"_id": "u2", "referral_count": 3},
+            {"_id": "u1", "referral_count": 1},
+        ]
+    )
     mongo = _FakeMongo(
         {
             # vouchers: 2 claimed today
             "claim_events": _FakeCollection(
                 rows=[{"total": 2}],
             ),
-            # users: find() rows for top_inviters; aggregate_rows for total snapshot
-            "users": _FakeCollection(
-                rows=[{"user_id": "u1", "username": "Alice", "referral_count": 5}],
-                aggregate_rows=[{"_id": None, "total": 5}],
-            ),
+            "users": users,
+            "referral_events": referrals,
         }
     )
     result = referral.compute_referral_daily(
@@ -95,6 +106,51 @@ def test_referral_daily_uses_voucher_claims_and_user_referral_count() -> None:
     # breakdown not available from vouchers schema
     assert result["qualified"] is None
     assert result.get("joins") == 2  # main assertion — joins sourced from vouchers
-    # top_inviters sourced from users.referral_count
-    assert result["top_inviters"][0]["referral_count"] == 5
-    assert result["top_inviters"][0]["username"] == "Alice"
+    # backward-compatible alias remains all-time from users.referral_count
+    assert result["top_inviters"][0]["inviter_user_id"] == "u1"
+    assert result["top_inviters"][0]["referral_count"] == 999
+    # explicit all-time metric
+    assert result["top_inviters_all_time"][0]["inviter_user_id"] == "u1"
+    assert result["top_inviters_all_time"][0]["referral_count"] == 999
+    # explicit weekly metric from referral_events
+    assert result["top_inviters_this_week"][0]["inviter_user_id"] == "u2"
+    assert result["top_inviters_this_week"][0]["referral_count"] == 3
+    assert result["top_inviters_this_week"][0]["username"] == "Bob"
+
+
+def test_referral_daily_weekly_top_inviters_uses_kl_monday_boundaries() -> None:
+    referrals = _FakeCollection(aggregate_rows=[])
+    mongo = _FakeMongo(
+        {
+            "claim_events": _FakeCollection(rows=[{"total": 0}]),
+            "users": _FakeCollection(rows=[], aggregate_rows=[]),
+            "referral_events": referrals,
+        }
+    )
+
+    referral.compute_referral_daily(
+        mongo, referral.datetime(2026, 1, 11, 18, 0, tzinfo=referral.timezone.utc)
+    )
+
+    match = referrals.aggregate_calls[0][0]["$match"]
+    assert match["event_time"]["$gte"].isoformat() == "2026-01-11T16:00:00+00:00"
+    assert match["event_time"]["$lt"].isoformat() == "2026-01-18T16:00:00+00:00"
+
+
+def test_referral_daily_weekly_top_inviters_monday_boundary_excludes_previous_week() -> None:
+    referrals = _FakeCollection(aggregate_rows=[])
+    mongo = _FakeMongo(
+        {
+            "claim_events": _FakeCollection(rows=[{"total": 0}]),
+            "users": _FakeCollection(rows=[], aggregate_rows=[]),
+            "referral_events": referrals,
+        }
+    )
+
+    referral.compute_referral_daily(
+        mongo, referral.datetime(2026, 1, 11, 15, 59, 59, tzinfo=referral.timezone.utc)
+    )
+
+    match = referrals.aggregate_calls[0][0]["$match"]
+    assert match["event_time"]["$gte"].isoformat() == "2026-01-04T16:00:00+00:00"
+    assert match["event_time"]["$lt"].isoformat() == "2026-01-11T16:00:00+00:00"
