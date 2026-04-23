@@ -8,6 +8,7 @@ from app.analytics.segmentation import compute_segmentation_kpis, compute_user_p
 from app.clients.mongo_client import MongoService
 from app.clients.telegram_client import TelegramService
 from app.config.settings import settings
+from app.dashboard.generator import generate_dashboard
 from app.reporting.formatter import build_daily_report, build_weekly_report
 from app.utils.time import utc_now
 
@@ -34,6 +35,7 @@ async def run_daily_pipeline(mongo, telegram):
         channel_stats=_load_channel_stats(mongo),
     )
     await telegram.send_report(report)
+    generate_dashboard(mongo)
     logger.info("Daily pipeline completed")
 
 async def run_weekly_pipeline(mongo, telegram):

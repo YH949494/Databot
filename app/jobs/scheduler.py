@@ -11,6 +11,8 @@ from app.clients.telegram_client import TelegramService
 from app.collectors.channel_collector import build_dispatcher
 from app.collectors.stats_refresh import refresh_post_stats
 from app.config.settings import settings
+from app.dashboard.generator import generate_dashboard
+from app.dashboard.server import start_dashboard_server
 from app.jobs.pipelines import run_daily_pipeline, run_weekly_pipeline
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,14 @@ async def run_forever() -> None:
             start_scheduler(mongo, telegram)
         else:
             logger.warning("Scheduler is disabled (SCHEDULER_ENABLED=false). Running in idle mode.")
+
+        # Generate an initial dashboard snapshot so the page is available immediately on startup.
+        logger.info("Generating initial dashboard snapshot…")
+        generate_dashboard(mongo)
+
+        # Start the HTTP dashboard server. aiohttp runs inside the same asyncio event loop,
+        # so it continues serving requests while aiogram long-polling is active.
+        await start_dashboard_server()
 
         # Start the channel event collector via aiogram long-polling.
         # This runs concurrently with the scheduler — one asyncio event loop handles both.
