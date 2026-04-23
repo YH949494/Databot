@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = Field(True, alias="SCHEDULER_ENABLED")
     schedule_daily_cron: str = Field("10 0 * * *", alias="SCHEDULE_DAILY_CRON")
     schedule_weekly_cron: str = Field("20 0 * * 1", alias="SCHEDULE_WEEKLY_CRON")
+    dashboard_url: str = Field("", alias="DASHBOARD_URL")
     source_collections: SourceCollections = Field(default_factory=SourceCollections)
     derived_collections: DerivedCollections = Field(default_factory=DerivedCollections)
     @field_validator("log_level")

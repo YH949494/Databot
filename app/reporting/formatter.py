@@ -105,6 +105,9 @@ def build_daily_report(report_date, tz_name, referral, channel, content, segment
         "- Prioritize content angles from top post during high-response posting window.",
         "- Audit no-checkin and left-before-hold failures for onboarding friction."
     ])
+    from app.config.settings import settings
+    if settings.dashboard_url:
+        lines.extend(["", f"📊 Dashboard: {settings.dashboard_url}"])
     return "\n".join(lines)
 
 def build_weekly_report(report_date, tz_name, weekly_referral, weekly_channel=None, channel_stats=None):
