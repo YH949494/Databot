@@ -111,22 +111,65 @@ def build_daily_report(report_date, tz_name, referral, channel, content, segment
     return "\n".join(lines)
 
 def build_weekly_report(report_date, tz_name, weekly_referral, weekly_channel=None, channel_stats=None):
+    trend = weekly_referral.get("trend_vs_previous_week")
+    trend_str = _fmt_pct(trend) if trend is not None else "no prior week data"
+    avg_time = weekly_referral.get("avg_time_to_qualify_hours")
     lines = [
         "🧠 Weekly Growth Intelligence Report", f"Generated: {format_local(report_date,tz_name)}", "",
-        "Referral", f"- Total referred joins: {weekly_referral.get('joins')}",
-        f"- Total qualified: {weekly_referral.get('qualified')}",
+        "Referral",
+        f"- Total referred joins: {_fmt_val(weekly_referral.get('joins'))}",
+        f"- Total qualified: {_fmt_val(weekly_referral.get('qualified'))}",
         f"- Conversion: {_fmt_pct(weekly_referral.get('overall_conversion'))}",
-        f"- Trend vs previous week: {_fmt_pct(weekly_referral.get('trend_vs_previous_week')) if weekly_referral.get('trend_vs_previous_week') is not None else 'no prior week data'}",
-        f"- Avg time to qualify: {weekly_referral.get('avg_time_to_qualify_hours') or 'null'}h",
-        "", "📡 Channel Stats (Telegram API)",
+        f"- Trend vs previous week: {trend_str}",
+        f"- Avg time to qualify: {avg_time if avg_time is not None else 'unavailable'}h",
     ]
+
+    top_inviters = weekly_referral.get("top_inviters", [])
+    best_conv = weekly_referral.get("inviters_with_best_conversion", [])
+    low_quality = weekly_referral.get("inviters_with_low_quality_traffic", [])
+    if top_inviters:
+        lines.append("- Top inviters by volume:")
+        for inv in top_inviters:
+            name = inv.get("username") or inv.get("inviter_user_id", "?")
+            lines.append(f"  {name}: {inv.get('joins', 0)} joins, {inv.get('qualified', 0)} qualified ({_fmt_pct(inv.get('conversion'))})")
+    if best_conv:
+        lines.append("- Best conversion inviters:")
+        for inv in best_conv:
+            name = inv.get("username") or inv.get("inviter_user_id", "?")
+            lines.append(f"  {name}: {_fmt_pct(inv.get('conversion'))} ({inv.get('joins', 0)} joins)")
+    if low_quality:
+        lines.append("- Low-quality traffic inviters:")
+        for inv in low_quality:
+            name = inv.get("username") or inv.get("inviter_user_id", "?")
+            lines.append(f"  {name}: {inv.get('joins', 0)} joins, {_fmt_pct(inv.get('conversion'))} conv")
+
+    lines.extend(["", "📡 Channel Stats (Telegram API)"])
     lines.extend(build_channel_stats_section(channel_stats))
-    if weekly_channel: lines.extend(["", "Channel Events", f"- Weekly net growth: {weekly_channel.get('net_growth')}"])
-    else: lines.extend(["", "Channel Events", "- Weekly channel summary: not available"])
-    lines.extend(["","Bottlenecks", f"- Failure reasons: {weekly_referral.get('failure_reason_breakdown')}",
-        "","Actions",
+
+    if weekly_channel:
+        lines.extend([
+            "", "Channel Events",
+            f"- Joins: {_fmt_val(weekly_channel.get('joins'))}",
+            f"- Leaves: {_fmt_val(weekly_channel.get('leaves'))}",
+            f"- Net growth: {_fmt_val(weekly_channel.get('net_growth'))}",
+            f"- Referred joins: {_fmt_val(weekly_channel.get('referred_joins'))}",
+            f"- Days with data: {weekly_channel.get('days_with_data', 0)}/7",
+        ])
+    else:
+        lines.extend(["", "Channel Events", "- Weekly channel summary: not available"])
+
+    fb = weekly_referral.get("failure_reason_breakdown") or {}
+    lines.extend(["", "Bottlenecks"])
+    if any(v for v in fb.values()):
+        for key, val in fb.items():
+            lines.append(f"- {key.replace('_', ' ').title()}: {val}")
+    else:
+        lines.append("- No failure data recorded this week")
+
+    lines.extend([
+        "", "Actions",
         "- Shift operator focus to inviters with highest stable conversion.",
         "- Reduce traffic sources producing repeated no-checkin/left-before-hold failures.",
-        "- Replicate best-performing content type and angle in next weekly plan."
+        "- Replicate best-performing content type and angle in next weekly plan.",
     ])
     return "\n".join(lines)
