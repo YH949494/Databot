@@ -62,6 +62,13 @@ jobs:
       - name: Set up flyctl
         uses: superfly/flyctl-actions/setup-flyctl@v1
 
+      - name: Validate Fly config in workspace
+        run: |
+          pwd
+          ls -la
+          sed -n '1,220p' fly.toml
+          grep -R "^\[\[services\]\]\|^\[processes\]" -n .
+
       - name: Push runtime secrets to Fly
         run: |
           if [ -n "${FLY_APP_NAME}" ]; then
@@ -80,7 +87,7 @@ jobs:
       - name: Deploy
         run: |
           if [ -n "${FLY_APP_NAME}" ]; then
-            flyctl deploy --remote-only --app "${FLY_APP_NAME}"
+            flyctl deploy --remote-only --config fly.toml --app "${FLY_APP_NAME}"
           else
-            flyctl deploy --remote-only
+            flyctl deploy --remote-only --config fly.toml
           fi
