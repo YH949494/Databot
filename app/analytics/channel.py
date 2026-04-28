@@ -97,9 +97,12 @@ def compute_channel_weekly(mongo: MongoService, for_date: datetime) -> dict[str,
     daily_docs = list(
         mongo.derived("channel_daily").find({"date": {"$gte": week_start, "$lt": week_end}})
     )
-    joins = sum(int(doc.get("new_joins") or 0) for doc in daily_docs)
-    leaves = sum(int(doc.get("leaves") or 0) for doc in daily_docs)
-    referred_joins = sum(int(doc.get("referred_joins") or 0) for doc in daily_docs)
+    # Exclude days where the source collection was unavailable — their metrics are
+    # None (not real zeros), so including them would silently undercount the week.
+    active_docs = [doc for doc in daily_docs if not doc.get("_source_missing")]
+    joins = sum(int(doc.get("new_joins") or 0) for doc in active_docs)
+    leaves = sum(int(doc.get("leaves") or 0) for doc in active_docs)
+    referred_joins = sum(int(doc.get("referred_joins") or 0) for doc in active_docs)
     summary = {
         "week_start": week_start,
         "week_end": week_end,
@@ -107,7 +110,11 @@ def compute_channel_weekly(mongo: MongoService, for_date: datetime) -> dict[str,
         "leaves": leaves,
         "net_growth": joins - leaves,
         "referred_joins": referred_joins,
-        "days_with_data": len(daily_docs),
+        "days_with_data": len(active_docs),
+        "days_source_missing": len(daily_docs) - len(active_docs),
     }
-    logger.info("Computed channel weekly summary for week starting %s: joins=%d leaves=%d", week_start.date(), joins, leaves)
+    logger.info(
+        "Computed channel weekly summary for week starting %s: joins=%d leaves=%d active_days=%d missing_days=%d",
+        week_start.date(), joins, leaves, len(active_docs), summary["days_source_missing"],
+    )
     return summary

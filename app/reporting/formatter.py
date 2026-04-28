@@ -147,13 +147,15 @@ def build_weekly_report(report_date, tz_name, weekly_referral, weekly_channel=No
     lines.extend(build_channel_stats_section(channel_stats))
 
     if weekly_channel:
+        missing = weekly_channel.get("days_source_missing", 0)
+        missing_note = f"  ⚠️ {missing} day{'s' if missing != 1 else ''} excluded (source unavailable)" if missing else ""
         lines.extend([
             "", "Channel Events",
             f"- Joins: {_fmt_val(weekly_channel.get('joins'))}",
             f"- Leaves: {_fmt_val(weekly_channel.get('leaves'))}",
             f"- Net growth: {_fmt_val(weekly_channel.get('net_growth'))}",
             f"- Referred joins: {_fmt_val(weekly_channel.get('referred_joins'))}",
-            f"- Days with data: {weekly_channel.get('days_with_data', 0)}/7",
+            f"- Days with data: {weekly_channel.get('days_with_data', 0)}/7{missing_note}",
         ])
     else:
         lines.extend(["", "Channel Events", "- Weekly channel summary: not available"])
