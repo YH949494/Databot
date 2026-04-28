@@ -82,4 +82,6 @@ async def run_weekly_pipeline(mongo, telegram):
         channel_stats=channel_stats,
     )
     await telegram.send_report(report)
+    generate_dashboard(mongo)
+    await telegram.send_dashboard(DASHBOARD_PATH)
     logger.info("Weekly pipeline completed")

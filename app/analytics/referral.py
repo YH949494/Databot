@@ -152,29 +152,40 @@ def compute_referral_weekly(mongo: MongoService, for_date: datetime) -> dict[str
     # Narrow projection — only fields needed for weekly inviter aggregation.
     inviter_docs = list(
         mongo.derived("inviter_daily").find(
-            {"date": {"$gte": week_start, "$lt": week_end}},
-            {"inviter_user_id": 1, "joins": 1, "qualified": 1},
+            {"date": {"$gte": week_start - timedelta(days=1), "$lt": week_end}},
+            {"inviter_user_id": 1, "username": 1, "date": 1, "joins": 1, "qualified": 1},
         )
     )
-    per_inviter: dict[str, dict[str, int]] = defaultdict(lambda: {"joins": 0, "qualified": 0})
+    per_inviter_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in inviter_docs:
         inviter_id = str(row.get("inviter_user_id"))
-        per_inviter[inviter_id]["joins"] += int(row.get("joins", 0))
-        per_inviter[inviter_id]["qualified"] += int(row.get("qualified", 0))
+        if inviter_id:
+            per_inviter_rows[inviter_id].append(row)
 
     inviter_rows = []
-    for inviter_id, stat in per_inviter.items():
-        conv = safe_divide(stat["qualified"], stat["joins"])
+    for inviter_id, rows in per_inviter_rows.items():
+        rows = sorted(rows, key=lambda r: r.get("date") or week_start)
+        in_week_rows = [r for r in rows if week_start <= (r.get("date") or week_start) < week_end]
+        if not in_week_rows:
+            continue
+        last_pre_week = [r for r in rows if (r.get("date") or week_start) < week_start]
+        baseline = int((last_pre_week[-1].get("joins") if last_pre_week else in_week_rows[0].get("joins")) or 0)
+        week_end_value = int((in_week_rows[-1].get("joins")) or 0)
+        weekly_joins = max(0, week_end_value - baseline)
+        inviter_qualified = sum(int(r.get("qualified", 0) or 0) for r in in_week_rows)
+        username = in_week_rows[-1].get("username")
+        conv = safe_divide(inviter_qualified, weekly_joins)
         inviter_rows.append(
             {
                 "inviter_user_id": inviter_id,
-                "joins": stat["joins"],
-                "qualified": stat["qualified"],
+                "username": username,
+                "joins": weekly_joins,
+                "qualified": inviter_qualified,
                 "conversion": conv,
             }
         )
 
-    top_inviters = sorted(inviter_rows, key=lambda x: x["qualified"], reverse=True)[:5]
+    top_inviters = sorted(inviter_rows, key=lambda x: x["joins"], reverse=True)[:5]
     inviters_with_best_conversion = sorted(
         [x for x in inviter_rows if x["joins"] >= 5 and x["conversion"] is not None],
         key=lambda x: x["conversion"],
