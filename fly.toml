@@ -15,19 +15,6 @@ primary_region = "sin"
 [processes]
   app = "python -m app.main --mode scheduler"
 
-[[services]]
-  internal_port = 8080
-  protocol = "tcp"
-  processes = ["app"]
-
-  [[services.ports]]
-    port = 80
-    handlers = ["http"]
-
-  [[services.ports]]
-    port = 443
-    handlers = ["tls", "http"]
-
 [[vm]]
   memory = "512mb"
   cpu_kind = "shared"
