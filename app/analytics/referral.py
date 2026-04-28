@@ -131,13 +131,13 @@ def compute_referral_weekly(mongo: MongoService, for_date: datetime) -> dict[str
         mongo.derived("referral_daily").find({"date": {"$gte": week_start, "$lt": week_end}})
     )
 
-    joins = sum(doc.get("joins", 0) for doc in daily_docs)
-    qualified = sum(doc.get("qualified", 0) for doc in daily_docs)
+    joins = sum(doc.get("joins") or 0 for doc in daily_docs)
+    qualified = sum(doc.get("qualified") or 0 for doc in daily_docs)
 
     failure_reason_breakdown = {
-        "failed_no_checkin": sum(doc.get("failed_no_checkin", 0) for doc in daily_docs),
-        "failed_not_subscribed": sum(doc.get("failed_not_subscribed", 0) for doc in daily_docs),
-        "failed_left_before_hold": sum(doc.get("failed_left_before_hold", 0) for doc in daily_docs),
+        "failed_no_checkin": sum(doc.get("failed_no_checkin") or 0 for doc in daily_docs),
+        "failed_not_subscribed": sum(doc.get("failed_not_subscribed") or 0 for doc in daily_docs),
+        "failed_left_before_hold": sum(doc.get("failed_left_before_hold") or 0 for doc in daily_docs),
     }
 
     # Weekly avg_time: use the daily values as proxies. Documented limitation — true

@@ -6,7 +6,7 @@ from typing import Any
 
 from app.analytics.rules import abnormal_spike
 from app.clients.mongo_client import MongoService
-from app.utils.time import day_bounds_utc
+from app.utils.time import day_bounds_utc, week_bounds_utc
 
 logger = logging.getLogger(__name__)
 
@@ -89,4 +89,32 @@ def compute_channel_daily(mongo: MongoService, for_date: datetime) -> dict[str, 
 
     mongo.upsert_one("channel_daily", {"date": day_start}, summary)
     logger.info("Computed channel daily summary for %s", day_start.date())
+    return summary
+
+
+def compute_channel_weekly(mongo: MongoService, for_date: datetime) -> dict[str, Any]:
+    week_start, week_end = week_bounds_utc(for_date.astimezone(timezone.utc))
+    daily_docs = list(
+        mongo.derived("channel_daily").find({"date": {"$gte": week_start, "$lt": week_end}})
+    )
+    # Exclude days where the source collection was unavailable — their metrics are
+    # None (not real zeros), so including them would silently undercount the week.
+    active_docs = [doc for doc in daily_docs if not doc.get("_source_missing")]
+    joins = sum(int(doc.get("new_joins") or 0) for doc in active_docs)
+    leaves = sum(int(doc.get("leaves") or 0) for doc in active_docs)
+    referred_joins = sum(int(doc.get("referred_joins") or 0) for doc in active_docs)
+    summary = {
+        "week_start": week_start,
+        "week_end": week_end,
+        "joins": joins,
+        "leaves": leaves,
+        "net_growth": joins - leaves,
+        "referred_joins": referred_joins,
+        "days_with_data": len(active_docs),
+        "days_source_missing": len(daily_docs) - len(active_docs),
+    }
+    logger.info(
+        "Computed channel weekly summary for week starting %s: joins=%d leaves=%d active_days=%d missing_days=%d",
+        week_start.date(), joins, leaves, len(active_docs), summary["days_source_missing"],
+    )
     return summary
